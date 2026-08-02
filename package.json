@@ -1,0 +1,37 @@
+{
+  "name": "programa-5s-sol",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Programa 5S + SOL — auditorias de organização, disciplina e segurança (Mondial). App independente.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "sync": "vite build && cap sync",
+    "icones": "capacitor-assets generate --assetPath assets --android",
+    "android": "vite build && cap sync android && cap open android",
+    "apk": "vite build && cap sync android && cd android && gradlew.bat assembleDebug",
+    "apk:release": "vite build && cap sync android && cd android && gradlew.bat assembleRelease"
+  },
+  "dependencies": {
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/keyboard": "^8.0.5",
+    "@capacitor/share": "^8.0.1",
+    "@capacitor/splash-screen": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.3",
+    "@supabase/supabase-js": "^2.103.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-icons": "^5.6.0"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.5.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "vite": "^8.0.1"
+  }
+}

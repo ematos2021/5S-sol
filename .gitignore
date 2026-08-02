@@ -1,0 +1,35 @@
+# Dependências
+node_modules
+
+# Builds
+dist
+dist-ssr
+.vite
+
+# Segredos — NUNCA commitar chaves
+.env
+.env.local
+.env.*.local
+*.local
+
+# Chave de assinatura do APK: quem a tiver publica atualizações no seu lugar
+*.jks
+*.keystore
+keystore.properties
+
+# Android gerado
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+
+# SO / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+npm-debug.log*
+*.log

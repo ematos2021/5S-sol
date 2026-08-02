@@ -1,0 +1,30 @@
+{
+  "appId": "br.com.mondial.programa5s",
+  "appName": "5S + SOL",
+  "webDir": "dist",
+  "backgroundColor": "#0f1014",
+  "android": {
+    "backgroundColor": "#0f1014",
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": true
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "launchShowDuration": 2000,
+      "backgroundColor": "#0f1014",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#0f1014",
+      "overlaysWebView": false
+    },
+    "Keyboard": {
+      "resize": "native"
+    },
+    "Camera": {
+      "androidxCameraCoreVersion": "1.5.0"
+    }
+  }
+}

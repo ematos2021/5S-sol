@@ -1,0 +1,86 @@
+:root {
+    --bg-app: #0f1014;
+    --bg-surface-glass: rgba(24, 25, 31, 0.7);
+    --color-text-main: #ffffff;
+    --color-text-muted: #8b9bb4;
+    --color-text-subtle: #5b6275;
+    --border-color-dark: #23252e;
+    --border-color: #23252e;
+    --radius-md: 12px;
+    --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    background: var(--bg-app);
+    color: var(--color-text-main);
+    font-family: 'Segoe UI', Roboto, -apple-system, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+
+.glass-panel {
+    background: var(--bg-surface-glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border-color-dark);
+    box-shadow: var(--shadow-sm);
+    border-radius: var(--radius-md);
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; }
+
+input, select, textarea, button { font-family: inherit; }
+input, textarea { color: var(--color-text-main); }
+/* opções de <select> legíveis no tema escuro */
+select option { background: #16171c; color: #fff; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #2a2c36; border-radius: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   App instalado (APK). A classe .app-nativo é posta no <html> por
+   src/services/nativo.js — no navegador nada abaixo tem efeito.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* A barra de status do sistema já ocupa o topo; o conteúdo respeita as bordas
+   arredondadas e o recorte da câmera do tablet. */
+.app-nativo body {
+    padding-bottom: env(safe-area-inset-bottom);
+    overscroll-behavior: none;              /* sem "elástico" nem puxar-para-recarregar */
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+}
+
+/* Auditoria é feita em pé, com o tablet na mão e às vezes de luva: segurar um
+   botão não pode virar seleção de texto. Campos e observações continuam
+   selecionáveis — o auditor precisa copiar e corrigir texto. */
+.app-nativo button,
+.app-nativo header,
+.app-nativo label {
+    user-select: none;
+    -webkit-user-select: none;
+}
+.app-nativo input,
+.app-nativo textarea,
+.app-nativo [contenteditable] {
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+/* Alvo de toque confortável em qualquer tela sensível ao toque, instalada ou
+   não: dedo com luva não acerta um botão de 28px. */
+@media (pointer: coarse) {
+    button, [role="button"] { min-height: 44px; }
+    input, select, textarea { min-height: 44px; font-size: 16px; }  /* 16px evita o zoom automático do iOS */
+}
+
+/* Sem mouse não existe hover: a barra de rolagem fina só atrapalha o toque. */
+.app-nativo ::-webkit-scrollbar { width: 0; height: 0; }

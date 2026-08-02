@@ -1,0 +1,96 @@
+# Monta o APK do Programa 5S + SOL na nuvem — sem Android Studio na máquina.
+#
+# Actions → "APK Android (5S + SOL)" → Run workflow. O APK sai em "Artifacts".
+#
+# Secrets obrigatórios (Settings → Secrets and variables → Actions):
+#   VITE_SUPABASE_URL        URL do projeto Supabase
+#   VITE_SUPABASE_ANON_KEY   anon key (nunca a service_role)
+#
+# A chave do Gemini NÃO entra aqui. Ela é segredo da Edge Function, no
+# servidor — qualquer VITE_* seria embutida no APK e ficaria legível.
+#
+# Secrets opcionais, para assinar com chave própria:
+#   ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD /
+#   ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD
+
+name: APK Android (5S + SOL)
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+    branches: [main]
+    paths-ignore: ['**.md', 'LICENSE']
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # `secrets` não é legível no `if:` de um passo — só aqui, no env do job.
+      TEM_CHAVE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Gravar chaves do Supabase
+        env:
+          URL: ${{ secrets.VITE_SUPABASE_URL }}
+          ANON: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          # Sem as chaves o app abre e não carrega nada — melhor falhar aqui do
+          # que descobrir com o APK já instalado no tablet do auditor.
+          if [ -z "$URL" ] || [ -z "$ANON" ]; then
+            echo "::error::Cadastre os secrets VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY em Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          printf 'VITE_SUPABASE_URL=%s\nVITE_SUPABASE_ANON_KEY=%s\n' "$URL" "$ANON" > .env
+
+      - name: Build + sync com o projeto Android
+        run: npx vite build && npx cap sync android
+
+      - name: Preparar assinatura (só se a chave estiver nos secrets)
+        if: env.TEM_CHAVE == 'true'
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/programa5s.jks
+          cat > android/keystore.properties <<EOF
+          storeFile=programa5s.jks
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+
+      - name: Montar APK assinado
+        if: env.TEM_CHAVE == 'true'
+        run: chmod +x android/gradlew && cd android && ./gradlew assembleRelease --no-daemon
+
+      - name: Montar APK de teste
+        if: env.TEM_CHAVE != 'true'
+        run: chmod +x android/gradlew && cd android && ./gradlew assembleDebug --no-daemon
+
+      - name: Publicar o APK como artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: programa5s-apk
+          path: android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Apagar a chave de assinatura do runner
+        if: always()
+        run: rm -f android/programa5s.jks android/keystore.properties
