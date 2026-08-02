@@ -1,6 +1,7 @@
 # Monta o APK do Programa 5S + SOL na nuvem — sem Android Studio na máquina.
 #
-# Actions → "APK Android (5S + SOL)" → Run workflow. O APK sai em "Artifacts".
+# https://github.com/ematos2021/5S-sol/actions → "APK Android (5S + SOL)" →
+# Run workflow. O APK sai em "Artifacts", no fim da execução.
 #
 # Secrets obrigatórios (Settings → Secrets and variables → Actions):
 #   VITE_SUPABASE_URL        URL do projeto Supabase

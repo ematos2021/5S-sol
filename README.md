@@ -57,10 +57,15 @@ avisa que está indisponível. Código em `supabase/functions/resumo-executivo/i
 
 ### Caminho A — na nuvem (nada para instalar)
 
-1. Suba o projeto para um repositório no GitHub.
-2. Cadastre os secrets `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`
-   (*Settings → Secrets and variables → Actions*).
-3. **Actions → "APK Android (5S + SOL)" → Run workflow** → baixe o `.apk` em *Artifacts*.
+Repositório: **https://github.com/ematos2021/5S-sol** (branch `main`).
+
+1. Cadastre os secrets `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`
+   (*Settings → Secrets and variables → Actions*) — os mesmos valores do `.env`.
+2. **Actions → "APK Android (5S + SOL)" → Run workflow** → baixe o `.apk` em *Artifacts*.
+
+> Sem chave de assinatura própria, **desinstale o app antigo antes de instalar um APK
+> novo**: cada execução gera uma chave de debug diferente e o Android recusa a
+> instalação por cima.
 
 ### Caminho B — na sua máquina
 
