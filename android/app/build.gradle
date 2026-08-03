@@ -10,10 +10,10 @@ if (arquivoChaves.exists()) {
 }
 
 android {
-    namespace = "br.com.mondial.programa5s"
+    namespace = "br.com.programa5s.auditoria"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "br.com.mondial.programa5s"
+        applicationId "br.com.programa5s.auditoria"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // Suba os dois a cada versão distribuída (versionCode só cresce).

@@ -1,4 +1,4 @@
-package br.com.mondial.programa5s;
+package br.com.programa5s.auditoria;
 
 import com.getcapacitor.BridgeActivity;
 

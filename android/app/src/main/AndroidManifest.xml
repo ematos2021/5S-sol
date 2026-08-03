@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!--
-      Sobre a CÂMERA: as fotos da auditoria usam <input type="file" capture>, que
-      o Capacitor resolve abrindo o app de câmera do sistema por intent. Ele só
-      oferece a câmera se a permissão CAMERA NÃO estiver declarada aqui (ver
-      BridgeWebChromeClient.isMediaCaptureSupported). Declarar quebraria a foto
-      para quem recusasse o pedido. Não acrescente essa permissão.
+      Sobre a CÂMERA: as fotos da auditoria usam <input type="file" capture>, que o
+      Capacitor resolve abrindo o app de câmera do sistema por intent. Ele só oferece
+      a câmera se a permissão CAMERA NÃO estiver declarada aqui (ver
+      BridgeWebChromeClient.isMediaCaptureSupported). Declarar quebraria a foto para
+      quem recusasse o pedido. Não acrescente essa permissão.
     -->
     <application
         android:allowBackup="false"

@@ -48,7 +48,7 @@ function montarPrompt(d: Payload): string {
   const criticos = (d.criticos || []).slice(0, 40);   // teto: prompt não vira dissertação
   const p = d.planos || {};
 
-  return `Você é o Assistente PRIME, especialista em 5S e segurança do trabalho de uma fábrica de eletrodomésticos (Grupo MK · Mondial). Escreva o RESUMO EXECUTIVO de uma auditoria integrada 5S + Programa SOL (Segurança, Organização, Limpeza), em português do Brasil, com tom OBJETIVO, TÉCNICO e IMPESSOAL. Escreva na 3ª pessoa, sem saudações, sem 1ª pessoa e sem exclamações. NÃO invente dados: use apenas os números abaixo.
+  return `Você é um especialista em 5S e segurança do trabalho. Escreva o RESUMO EXECUTIVO de uma auditoria integrada 5S + Programa SOL (Segurança, Organização, Limpeza), em português do Brasil, com tom OBJETIVO, TÉCNICO e IMPESSOAL. Escreva na 3ª pessoa, sem saudações, sem 1ª pessoa e sem exclamações. NÃO invente dados: use apenas os números abaixo.
 Área: ${a.fabrica || ''} · ${a.setor || ''}${a.maquina ? ` · ${a.maquina}` : ''} (${a.planta || ''}).
 Índice Solar: ${d.solar != null ? d.solar + '%' : 'sem leitura'} (média do 5S com o SOL).
 Sensos 5S: ${linha(d.sensos)}.

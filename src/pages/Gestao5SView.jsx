@@ -17,9 +17,9 @@ const SOL_ACCENT = '#F59E0B';
 // Lookup unificado de dimensões (5S + SOL) para plano de ação e relatório
 const DIM_BY_ID = Object.fromEntries([...SENSOS, ...SOL_PILARES].map(d => [d.id, d]));
 
-// O resumo por IA agora passa por uma Edge Function do Supabase: a chave do
-// Gemini é cobrada por uso e ficava aqui, legível para qualquer um que abrisse
-// o código-fonte da página ou descompactasse o APK. Ver src/services/ia.js.
+// O resumo por IA passa por uma Edge Function do Supabase. A chave do Gemini é
+// cobrada por uso e ficava aqui, legível para quem abrisse o código-fonte da
+// página ou descompactasse o APK — que é um zip. Ver src/services/ia.js.
 const gerarResumoIA5S = (aud, sc, scSol, solar) => gerarResumoExecutivo(aud, sc, scSol, solar);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ const Radar5S = ({ scores, size = 190, mini = false }) => {
     );
 };
 
-// ─── "O sol vai nascer na Mondial" — nascer do sol por Índice Solar (SVG) ─────
+// ─── Nascer do sol por Índice Solar (SVG) ─────
 // value 0–100 (ou null). O sol sobe do horizonte conforme o índice; o céu e os
 // raios acompanham o estágio (selo). Núcleo lúdico do Programa SOL.
 const SolNascente = ({ value, size = 150, label = true }) => {
@@ -125,7 +125,7 @@ const SolNascente = ({ value, size = 150, label = true }) => {
                     <rect x="18" y={horizon - 14} width="26" height="14" /><rect x="30" y={horizon - 22} width="7" height="8" />
                     <rect x="150" y={horizon - 18} width="30" height="18" /><rect x="160" y={horizon - 27} width="6" height="9" />
                 </g>
-                <text x={W / 2} y={H - 7} textAnchor="middle" fontSize="11" fontWeight="900" fill="#fde68a" opacity="0.85" letterSpacing="1">MONDIAL</text>
+                <text x={W / 2} y={H - 7} textAnchor="middle" fontSize="11" fontWeight="900" fill="#fde68a" opacity="0.85" letterSpacing="1">5S + SOL</text>
             </svg>
             {label && (
                 <div style={{ textAlign: 'center', lineHeight: 1.15 }}>
@@ -320,7 +320,7 @@ function gerarRelatorio5S(aud, emitente) {
             <g stroke="${sunCor}" stroke-width="3" stroke-linecap="round" opacity="${(0.35 + v / 100 * 0.6).toFixed(2)}">${rays}</g>
             <circle cx="${W / 2}" cy="${sunY.toFixed(1)}" r="${sunR}" fill="${sunCor}"/>
             <rect x="0" y="${horizon}" width="${W}" height="${H - horizon}" fill="#0d2818"/><rect x="0" y="${horizon}" width="${W}" height="3" fill="${sunCor}" opacity="0.5"/>
-            <text x="${W / 2}" y="${H - 8}" text-anchor="middle" font-size="12" font-weight="900" fill="#fde68a" opacity="0.85" letter-spacing="1">MONDIAL</text></svg>`;
+            <text x="${W / 2}" y="${H - 8}" text-anchor="middle" font-size="12" font-weight="900" fill="#fde68a" opacity="0.85" letter-spacing="1">5S + SOL</text></svg>`;
     })();
 
     const planoRows = planos.map(pl => {
@@ -365,7 +365,7 @@ function gerarRelatorio5S(aud, emitente) {
 <div class="sheet" style="max-width:900px;margin:24px auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 10px 25px rgba(0,0,0,.1)">
     <div style="background:linear-gradient(120deg,#0d2818 55%,#7c2d12);padding:20px 30px;display:flex;justify-content:space-between;align-items:center;gap:14px">
         <div><h1 style="margin:0;color:#fff;font-size:20px;font-weight:900">🧹 Relatório 5S <span style="color:#fbbf24">☀️ SOL</span></h1>
-        <p style="margin:3px 0 0;color:#fcd34d;font-size:10px;text-transform:uppercase;letter-spacing:1px;font-weight:700">PRIME SGI · 5S + Programa SOL · “O sol vai nascer na Mondial”</p></div>
+        <p style="margin:3px 0 0;color:#fcd34d;font-size:10px;text-transform:uppercase;letter-spacing:1px;font-weight:700">5S + Programa SOL · Segurança · Organização · Limpeza</p></div>
         <div style="text-align:right;color:#cbd5e1;font-size:10px"><div style="font-size:13px;color:#fff;font-weight:900">${esc(aud.fabrica)} · ${esc(aud.setor)}${aud.maquina ? ` · ${esc(aud.maquina)}` : ''}</div><div>${esc(aud.planta)}</div><div>Emitido em ${nowStr} por ${esc(emitente)}</div></div>
     </div>
     <div style="padding:22px 30px">
@@ -397,7 +397,7 @@ function gerarRelatorio5S(aud, emitente) {
         </div>
 
         ${scSol.geral != null ? `
-        ${h2('☀️ Programa SOL — o sol nascendo na Mondial')}
+        ${h2('☀️ Programa SOL — Segurança · Organização · Limpeza')}
         <div class="avoid-break" style="display:flex;gap:24px;align-items:center;flex-wrap:wrap;background:linear-gradient(120deg,#fff7ed,#fff);border:1px solid #fed7aa;border-radius:10px;padding:16px">
             <div style="flex-shrink:0;text-align:center">${solSvg}<div style="font-size:13px;font-weight:900;color:${selo.cor};margin-top:6px">${selo.emoji} ${solar}% · ${selo.label}</div></div>
             <div style="flex:1;min-width:280px">${barrasSol}
@@ -418,7 +418,7 @@ function gerarRelatorio5S(aud, emitente) {
 
         ${galleryHtml}
 
-        <div style="margin-top:28px;padding-top:12px;border-top:1px solid #e2e8f0;text-align:center;color:#94a3b8;font-size:10px;font-weight:700">Documento gerado automaticamente pelo PRIME SGI — Grupo MK · ${nowStr}</div>
+        <div style="margin-top:28px;padding-top:12px;border-top:1px solid #e2e8f0;text-align:center;color:#94a3b8;font-size:10px;font-weight:700">Documento gerado automaticamente · ${nowStr}</div>
     </div>
 </div></body></html>`;
 
@@ -483,7 +483,7 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
         try {
             const novo = await gerarResumoIA5S({ ...aud, respostas, observacoes, planos }, sc, scSol, solar);
             setAnaliseIa(novo); setIaEditing(false);
-        } catch (e) { console.error(e); setIaErr('O Assistente PRIME não conseguiu gerar agora. Tente novamente.'); }
+        } catch (e) { console.error(e); setIaErr('O Assistente IA não conseguiu gerar agora. Tente novamente.'); }
         finally { setIaLoading(false); }
     };
 
@@ -584,7 +584,7 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
                     <SolNascente value={solar} size={132} />
                     <div style={{ flex: 1, minWidth: 200 }}>
                         <div style={{ fontSize: '0.95rem', fontWeight: 900, color: SOL_ACCENT, display: 'flex', alignItems: 'center', gap: '0.4rem' }}><FaSun /> Programa SOL · Segurança · Organização · Limpeza</div>
-                        <div style={{ fontSize: '0.72rem', color: 'var(--color-text-main)', fontWeight: 700, marginTop: 2 }}>“O sol vai nascer na Mondial.”</div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--color-text-main)', fontWeight: 700, marginTop: 2 }}>Segurança · Organização · Limpeza</div>
                         <div style={{ fontSize: '0.68rem', color: 'var(--color-text-muted)', marginTop: 4, lineHeight: 1.4 }}>{solSelo(solar).frase}</div>
                         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
                             {SOL_PILARES.map(p => (
@@ -601,7 +601,7 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
                         <div style={{ width: 32, height: 32, borderRadius: 8, background: `${ACCENT}22`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><FaRobot color={ACCENT} size={15} /></div>
                         <div style={{ flex: 1, minWidth: 130 }}>
                             <div style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--color-text-main)' }}>Resumo Executivo</div>
-                            <div style={{ fontSize: '0.62rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>Gerado pelo Assistente PRIME · editável · sai no relatório</div>
+                            <div style={{ fontSize: '0.62rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>Gerado por IA · editável · sai no relatório</div>
                         </div>
                         {!iaEditing && !iaLoading && (
                             <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
@@ -612,7 +612,7 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
                     </div>
                     {iaErr && <div style={{ fontSize: '0.7rem', color: '#DC2626', marginBottom: '0.5rem' }}>{iaErr}</div>}
                     {iaLoading ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 0.3rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}><FaSpinner className="spin" color={ACCENT} /> O Assistente PRIME está analisando a auditoria…</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 0.3rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}><FaSpinner className="spin" color={ACCENT} /> O Assistente IA está analisando a auditoria…</div>
                     ) : iaEditing ? (
                         <div>
                             <textarea value={iaDraft} onChange={e => setIaDraft(e.target.value)} rows={6}
@@ -900,15 +900,8 @@ export default function Gestao5SView() {
     return (
         <div style={{ padding: isMobile ? '0.8rem' : '1rem 1.25rem', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: '0.7rem' }}>
             {msg && <Toast msg={msg} />}
-            {/* Header */}
-            <div style={{ flexShrink: 0, display: 'flex', alignItems: isMobile ? 'stretch' : 'center', justifyContent: 'space-between', gap: '0.6rem', flexDirection: isMobile ? 'column' : 'row' }}>
-                <div>
-                    <div style={{ fontSize: isMobile ? '1rem' : '1.1rem', fontWeight: 900, color: 'var(--color-text-main)', display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap' }}>
-                        <FaBroom color={ACCENT} /> Programa 5S <FaSun color={SOL_ACCENT} /> <span style={{ color: SOL_ACCENT }}>SOL</span>
-                        <span title="5S (maturidade 0–5) integrado ao Programa SOL — Segurança, Organização e Limpeza. Juntos formam o Índice Solar." style={{ fontSize: '0.58rem', fontWeight: 800, letterSpacing: '1px', color: SOL_ACCENT, background: `${SOL_ACCENT}18`, padding: '0.15rem 0.55rem', borderRadius: 5, cursor: 'help', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}><FaGraduationCap size={9} /> 5S + SOL</span>
-                    </div>
-
-                </div>
+            {/* Ação rápida */}
+            <div style={{ flexShrink: 0, display: 'flex', justifyContent: 'flex-end' }}>
                 <button onClick={() => setShowNova(true)} style={btnPrim}><FaPlus size={12} /> Nova Auditoria</button>
             </div>
 
@@ -1151,7 +1144,7 @@ export default function Gestao5SView() {
                             <div className="glass-panel" style={{ borderRadius: 13, border: '1px solid var(--border-color-dark)', padding: '1.1rem' }}>
                                 <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}><FaTrophy size={12} color="#EAB308" /> Mural do Sol — o sol nasceu aqui ☀️</div>
                                 {muralSol.length === 0 ? (
-                                    <div style={{ fontSize: '0.74rem', color: 'var(--color-text-muted)', lineHeight: 1.5 }}>Nenhuma área em <b>sol pleno</b> (Índice Solar ≥ 85%) ainda. A primeira a chegar lá entra no mural e vira referência da Mondial!</div>
+                                    <div style={{ fontSize: '0.74rem', color: 'var(--color-text-muted)', lineHeight: 1.5 }}>Nenhuma área em <b>sol pleno</b> (Índice Solar ≥ 85%) ainda. A primeira a chegar lá entra no mural e vira referência!</div>
                                 ) : muralSol.slice(0, 12).map((m, i) => (
                                     <div key={areaKey(m)} style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', marginBottom: '0.5rem', padding: '0.35rem 0.5rem', borderRadius: 8, background: '#EAB30812' }}>
                                         <span style={{ fontSize: '1rem' }}>{i === 0 ? '🏆' : '☀️'}</span>

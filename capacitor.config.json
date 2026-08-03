@@ -1,5 +1,5 @@
 {
-  "appId": "br.com.mondial.programa5s",
+  "appId": "br.com.programa5s.auditoria",
   "appName": "5S + SOL",
   "webDir": "dist",
   "backgroundColor": "#0f1014",
@@ -22,9 +22,6 @@
     },
     "Keyboard": {
       "resize": "native"
-    },
-    "Camera": {
-      "androidxCameraCoreVersion": "1.5.0"
     }
   }
 }

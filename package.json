@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Programa 5S + SOL — auditorias de organização, disciplina e segurança (Mondial). App independente.",
+  "description": "Programa 5S + SOL — auditorias de organização, disciplina e segurança. App independente (web + tablet Android).",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
