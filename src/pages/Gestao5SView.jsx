@@ -715,7 +715,20 @@ export default function Gestao5SView() {
             supabase.from('cinco_s_auditoria').select('*').order('updated_at', { ascending: false }),
             supabase.from('cadastro_planta_area').select('planta, fabrica, setor, maquina'),
         ]);
-        setAuditorias(auds || []);
+        
+        // Fallback: se a coluna 'maquina' não existir no banco (ou estiver nula),
+        // tentamos extrair do título (ex: "5S Nº 009 · FÁBRICA 1 · MONTAGEM · LINHA 1 · Agosto/2026")
+        const audsTratadas = (auds || []).map(a => {
+            if (a.maquina === undefined || a.maquina === null) {
+                const parts = (a.titulo || '').split(' · ');
+                if (parts.length >= 5) {
+                    a.maquina = parts[parts.length - 2].trim();
+                }
+            }
+            return a;
+        });
+        
+        setAuditorias(audsTratadas);
         setEstrutura(est || []);
         setLoading(false);
     }, []);
