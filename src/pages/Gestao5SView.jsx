@@ -908,13 +908,92 @@ export default function Gestao5SView() {
     concluidas.forEach(a => { const nome = (a.auditor || '').trim() || '—'; porAuditor[nome] = (porAuditor[nome] || 0) + 1; });
     const rankAuditores = Object.entries(porAuditor).map(([nome, qtd]) => ({ nome, qtd })).sort((a, b) => b.qtd - a.qtd);
 
+    const gerarRelatorioGeral = () => {
+        const nowStr = new Date().toLocaleDateString('pt-BR');
+        const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const scCorHex = (s) => s == null ? '#94a3b8' : s >= 85 ? '#16a34a' : s >= 70 ? '#d97706' : '#dc2626';
+
+        const rankingHtml = [...mapaSetores].filter(s => s.mediaSolar != null).sort((a, b) => b.mediaSolar - a.mediaSolar).map((s, i) => `
+            <tr>
+                <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;font-size:11px">${i + 1}º</td>
+                <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-size:11px">${esc(s.fabrica)} · ${esc(s.setor)}</td>
+                <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-weight:900;color:${scCorHex(s.mediaSolar)};text-align:right">${s.mediaSolar}%</td>
+            </tr>
+        `).join('');
+
+        const muralHtml = muralSol.map((m, i) => `
+            <div style="display:inline-block;margin:4px;padding:6px 10px;border-radius:6px;background:#fffbeb;border:1px solid #fde68a;font-size:11px;font-weight:700;color:#92400e">
+                ${i === 0 ? '🏆' : '☀️'} ${esc(areaLabel(m))} (${solarDe(m.ult)}%)
+            </div>
+        `).join('');
+
+        const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Relatório Geral 5S+SOL</title>
+        <style>
+            * { -webkit-print-color-adjust: exact; print-color-adjust: exact; font-family:'Segoe UI',Roboto,Arial,sans-serif; }
+            @page { size: A4; margin: 10mm; }
+            @media print { body { background: #fff !important; margin: 0 !important; } .no-print { display: none !important; } }
+        </style></head>
+        <body style="margin:0;background:#f3f4f6;">
+        <button class="no-print" onclick="window.print()" style="position:fixed;top:16px;right:16px;background:#16a34a;color:#fff;border:none;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:13px;font-weight:800;box-shadow:0 4px 14px rgba(22,163,74,.4)">🖨️ Imprimir / Salvar PDF</button>
+        <div style="max-width:900px;margin:24px auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 10px 25px rgba(0,0,0,.1)">
+            <div style="background:linear-gradient(120deg,#0d2818 55%,#7c2d12);padding:20px 30px;color:#fff;">
+                <h1 style="margin:0;font-size:20px;font-weight:900">📊 Relatório Geral 5S <span style="color:#fbbf24">☀️ SOL</span></h1>
+                <p style="margin:3px 0 0;color:#fcd34d;font-size:10px;text-transform:uppercase;">Visão Global do Parque · Emitido em ${nowStr}</p>
+            </div>
+            <div style="padding:22px 30px">
+                <div style="display:flex;gap:10px;margin-bottom:20px">
+                    <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center">
+                        <div style="font-size:24px;font-weight:900;color:${scCorHex(solarMedio)}">${solarMedio != null ? solarMedio + '%' : '—'}</div>
+                        <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Índice Solar Médio</div>
+                    </div>
+                    <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center">
+                        <div style="font-size:24px;font-weight:900;color:${scCorHex(mediaGeral)}">${mediaGeral != null ? mediaGeral + '%' : '—'}</div>
+                        <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Score 5S Médio</div>
+                    </div>
+                    <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center">
+                        <div style="font-size:24px;font-weight:900;color:#3B82F6">${auditadas.length}/${areasCadastro.length}</div>
+                        <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Áreas Auditadas</div>
+                    </div>
+                    <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center">
+                        <div style="font-size:24px;font-weight:900;color:${acoesAbertasTot ? '#d97706' : '#16a34a'}">${acoesAbertasTot}</div>
+                        <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Ações Abertas</div>
+                    </div>
+                </div>
+
+                <h2 style="font-size:14px;color:#0f172a;border-bottom:2px solid #22c55e;padding-bottom:5px;margin-bottom:10px">🏆 Mural do Sol (Áreas ≥ 85%)</h2>
+                <div style="margin-bottom:20px">${muralHtml || '<span style="font-size:12px;color:#64748b">Nenhuma área no Mural do Sol ainda.</span>'}</div>
+
+                <h2 style="font-size:14px;color:#0f172a;border-bottom:2px solid #22c55e;padding-bottom:5px;margin-bottom:10px">📈 Ranking dos Setores</h2>
+                <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+                    <tr style="background:#f1f5f9">
+                        <th style="padding:6px 10px;font-size:10px;color:#64748b;text-align:left">Posição</th>
+                        <th style="padding:6px 10px;font-size:10px;color:#64748b;text-align:left">Setor</th>
+                        <th style="padding:6px 10px;font-size:10px;color:#64748b;text-align:right">Índice Solar</th>
+                    </tr>
+                    ${rankingHtml || '<tr><td colspan="3" style="padding:10px;text-align:center;font-size:12px;color:#64748b">Nenhum setor avaliado</td></tr>'}
+                </table>
+                <div style="margin-top:28px;padding-top:12px;border-top:1px solid #e2e8f0;text-align:center;color:#94a3b8;font-size:10px;font-weight:700">Documento gerado automaticamente · ${nowStr}</div>
+            </div>
+        </div></body></html>`;
+
+        entregarRelatorio(html, `Relatorio_Geral_5S_${nowStr.replace(/\//g, '-')}.html`).catch(e => {
+            console.error('[relatorio geral]', e);
+            alert('Não foi possível gerar o relatório neste aparelho.');
+        });
+    };
+
     if (sel) return <Auditoria5S aud={sel} onClose={() => setSel(null)} onSave={saveAuditoria} saving={saving} />;
 
     return (
         <div style={{ padding: isMobile ? '0.8rem' : '1rem 1.25rem', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: '0.7rem' }}>
             {msg && <Toast msg={msg} />}
             {/* Ação rápida */}
-            <div style={{ flexShrink: 0, display: 'flex', justifyContent: 'flex-end' }}>
+            <div style={{ flexShrink: 0, display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                {tab === 'indicadores' && (
+                    <button onClick={gerarRelatorioGeral} style={{ ...btnSec, borderColor: '#3B82F655', color: '#3B82F6' }}>
+                        <FaFilePdf size={12} /> Relatório Geral
+                    </button>
+                )}
                 <button onClick={() => setShowNova(true)} style={btnPrim}><FaPlus size={12} /> Nova Auditoria</button>
             </div>
 
@@ -1025,11 +1104,16 @@ export default function Gestao5SView() {
                                                         </div>
                                                     )}
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginTop: '0.45rem', fontSize: '0.63rem', color: 'var(--color-text-muted)', flexWrap: 'wrap' }}>
-                                                        {m.ult ? (<>
-                                                            <span>Última: {fmtData(m.ult.data_auditoria)}</span>
-                                                            {m.delta != null && <span style={{ fontWeight: 800, color: m.delta >= 0 ? '#16A34A' : '#DC2626' }}>{m.delta >= 0 ? '▲' : '▼'} {Math.abs(m.delta)} pts</span>}
-                                                            {m.acoesAbertas > 0 && <span style={{ color: '#D97706', fontWeight: 700 }}>{m.acoesAbertas} ação(ões)</span>}
-                                                        </>) : <span style={{ color: 'var(--color-text-subtle)', fontStyle: 'italic' }}>Nunca auditada</span>}
+                                                        {m.ult ? (() => {
+                                                            const diasAtraso = Math.round((Date.now() - new Date(String(m.ult.data_auditoria).slice(0, 10) + 'T12:00:00')) / 86400000);
+                                                            const atrasada = diasAtraso > 30;
+                                                            return <>
+                                                                <span>Última: {fmtData(m.ult.data_auditoria)}</span>
+                                                                {atrasada && <span style={{ color: '#DC2626', fontWeight: 800 }}>⚠️ +30 dias</span>}
+                                                                {m.delta != null && <span style={{ fontWeight: 800, color: m.delta >= 0 ? '#16A34A' : '#DC2626' }}>{m.delta >= 0 ? '▲' : '▼'} {Math.abs(m.delta)} pts</span>}
+                                                                {m.acoesAbertas > 0 && <span style={{ color: '#D97706', fontWeight: 700 }}>{m.acoesAbertas} ação(ões)</span>}
+                                                            </>;
+                                                        })() : <span style={{ color: 'var(--color-text-subtle)', fontStyle: 'italic' }}>Nunca auditada</span>}
                                                     </div>
                                                     <button onClick={() => { setNovaPrefill({ planta: m.planta, fabrica: m.fabrica, setor: m.setor, maquina: m.maquina }); setShowNova(true); }}
                                                         style={{ ...btnSec, width: '100%', justifyContent: 'center', marginTop: '0.6rem', borderColor: `${ACCENT}55`, color: ACCENT, fontSize: '0.7rem' }}>
