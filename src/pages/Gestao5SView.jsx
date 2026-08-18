@@ -28,9 +28,31 @@ const fmtData = (d) => d ? new Date(String(d).slice(0, 10) + 'T12:00:00').toLoca
 const uid = () => `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 const scoreCor = (s) => s == null ? '#64748B' : s >= 85 ? '#16A34A' : s >= 70 ? '#D97706' : '#DC2626';
 const notaCor = (n) => n == null ? 'var(--border-color-dark)' : n <= 1 ? '#DC2626' : n === 2 ? '#EA580C' : n === 3 ? '#D97706' : n === 4 ? '#84CC16' : '#16A34A';
-const areaKey = (a) => `${a.planta || ''}|${a.fabrica || ''}|${a.setor || ''}|${a.maquina || ''}`;
+const norm = (s) => String(s ?? '').trim().toUpperCase();
+const areaKey = (a) => `${norm(a?.planta)}|${norm(a?.fabrica)}|${norm(a?.setor)}|${norm(a?.maquina)}`;
 // Rótulo curto da área (inclui a linha/máquina quando houver)
-const areaLabel = (a) => `${a.fabrica || ''} · ${a.setor || ''}${a.maquina ? ` · ${a.maquina}` : ''}`;
+const areaLabel = (a) => `${a?.fabrica || ''} · ${a?.setor || ''}${a?.maquina ? ` · ${a.maquina}` : ''}`;
+
+const extractMaquina = (a) => {
+    if (a?.maquina && String(a.maquina).trim()) return String(a.maquina).trim();
+    const parts = (a?.titulo || '').split(' · ');
+    if (parts.length >= 5) {
+        return parts[parts.length - 2].trim();
+    }
+    return null;
+};
+
+const tratarAuditoria = (a) => {
+    if (!a) return a;
+    const maq = a.maquina?.trim() || extractMaquina(a);
+    return {
+        ...a,
+        planta: a.planta ? String(a.planta).trim() : null,
+        fabrica: a.fabrica ? String(a.fabrica).trim() : null,
+        setor: a.setor ? String(a.setor).trim() : null,
+        maquina: maq || null,
+    };
+};
 
 function useIsMobile() {
     const [mob, setMob] = useState(typeof window !== 'undefined' ? window.innerWidth <= 768 : false);
@@ -775,28 +797,30 @@ export default function Gestao5SView() {
             supabase.from('cadastro_planta_area').select('planta, fabrica, setor, maquina'),
         ]);
         
-        // Fallback: se a coluna 'maquina' não existir no banco (ou estiver nula),
-        // tentamos extrair do título (ex: "5S Nº 009 · FÁBRICA 1 · MONTAGEM · LINHA 1 · Agosto/2026")
-        const audsTratadas = (auds || []).map(a => {
-            if (a.maquina === undefined || a.maquina === null) {
-                const parts = (a.titulo || '').split(' · ');
-                if (parts.length >= 5) {
-                    a.maquina = parts[parts.length - 2].trim();
-                }
-            }
-            return a;
-        });
+        const audsTratadas = (auds || []).map(tratarAuditoria);
         
         setAuditorias(audsTratadas);
         setEstrutura(est || []);
         setLoading(false);
     }, []);
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => {
+        load();
+        const channel = supabase
+            .channel('cinco_s_auditoria_realtime')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'cinco_s_auditoria' }, () => {
+                load();
+            })
+            .subscribe();
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, [load]);
 
     const saveAuditoria = async (aud) => {
         setSaving(true);
+        const maquinaAlvo = aud.maquina || extractMaquina(aud);
         let payload = {
-            titulo: aud.titulo, planta: aud.planta, fabrica: aud.fabrica, setor: aud.setor, maquina: aud.maquina ?? null,
+            titulo: aud.titulo, planta: aud.planta, fabrica: aud.fabrica, setor: aud.setor, maquina: maquinaAlvo ?? null,
             auditor: aud.auditor, acompanhante: aud.acompanhante, data_auditoria: aud.data_auditoria,
             status: aud.status, respostas: aud.respostas, observacoes: aud.observacoes, fotos: aud.fotos,
             planos: aud.planos, score: aud.score, scores: aud.scores, analise_ia: aud.analise_ia ?? null, criado_por: aud.criado_por || userName,
@@ -817,7 +841,7 @@ export default function Gestao5SView() {
         }
         if (!error && faltou) showMsg('Salvo (rode os cinco_s_update*.sql p/ guardar resumo/máquina)', 'success');
         if (error) { setSaving(false); showMsg('Erro: ' + error.message, 'error'); return; }
-        const saved = data;
+        const saved = tratarAuditoria({ ...aud, ...data, maquina: maquinaAlvo });
         setAuditorias(prev => aud.id ? prev.map(a => a.id === saved.id ? saved : a) : [saved, ...prev]);
         setSaving(false);
         setSel(null);
@@ -873,20 +897,41 @@ export default function Gestao5SView() {
     const areasCadastro = [];
     const seen = new Set();
     const setorTemMaquina = new Set();
-    estrutura.forEach(e => { if (e.fabrica && e.setor && e.maquina) setorTemMaquina.add(`${e.planta || ''}|${e.fabrica}|${e.setor}`); });
+    estrutura.forEach(e => {
+        if (e.fabrica && e.setor && e.maquina) {
+            setorTemMaquina.add(`${norm(e.planta)}|${norm(e.fabrica)}|${norm(e.setor)}`);
+        }
+    });
     estrutura.forEach(e => {
         if (!e.fabrica || !e.setor) return;
-        const setorK = `${e.planta || ''}|${e.fabrica}|${e.setor}`;
+        const setorK = `${norm(e.planta)}|${norm(e.fabrica)}|${norm(e.setor)}`;
         // pula a linha "setor sem máquina" quando o setor possui máquinas cadastradas
         if (!e.maquina && setorTemMaquina.has(setorK)) return;
-        const k = `${setorK}|${e.maquina || ''}`;
+        const k = `${setorK}|${norm(e.maquina)}`;
         if (seen.has(k)) return;
         seen.add(k);
         areasCadastro.push({ planta: e.planta, fabrica: e.fabrica, setor: e.setor, maquina: e.maquina || null });
     });
+
+    // Inclui dinamicamente qualquer área/máquina presente nas auditorias (garante que novas auditorias atualizem o mapa na hora)
+    auditorias.forEach(a => {
+        if (!a.fabrica || !a.setor) return;
+        const maq = a.maquina || extractMaquina(a);
+        const k = `${norm(a.planta)}|${norm(a.fabrica)}|${norm(a.setor)}|${norm(maq)}`;
+        if (!seen.has(k)) {
+            seen.add(k);
+            areasCadastro.push({ planta: a.planta, fabrica: a.fabrica, setor: a.setor, maquina: maq || null });
+        }
+    });
+
     const mapa = areasCadastro.map(area => {
         const hist = concluidas.filter(a => areaKey(a) === areaKey(area))
-            .sort((a, b) => new Date(b.data_auditoria || b.created_at) - new Date(a.data_auditoria || a.created_at));
+            .sort((a, b) => {
+                const db = new Date(b.data_auditoria || b.updated_at || b.created_at || 0).getTime();
+                const da = new Date(a.data_auditoria || a.updated_at || a.created_at || 0).getTime();
+                if (db !== da) return db - da;
+                return (b.id || 0) - (a.id || 0);
+            });
         const ult = hist[0] || null;
         const ant = hist[1] || null;
         const acoesAbertas = hist.reduce((s, a) => s + (a.planos || []).filter(p => p.status !== 'concluida').length, 0);
