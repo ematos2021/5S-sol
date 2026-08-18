@@ -9,7 +9,7 @@ import {
     FaPlus, FaTrash, FaSync, FaCheck, FaTimes, FaChevronLeft, FaBroom,
     FaChartPie, FaListUl, FaMapMarkedAlt, FaCamera, FaArrowLeft, FaCheckCircle,
     FaIndustry, FaExclamationTriangle, FaBolt, FaGraduationCap, FaClipboardCheck, FaFilePdf,
-    FaSun, FaShieldAlt, FaHardHat, FaTrophy, FaMagic, FaRobot, FaSave, FaPen, FaSpinner, FaCalendarAlt,
+    FaSun, FaShieldAlt, FaHardHat, FaTrophy, FaMagic, FaRobot, FaSave, FaPen, FaSpinner, FaCalendarAlt, FaInfoCircle,
 } from 'react-icons/fa';
 
 const ACCENT = '#22C55E';
@@ -214,7 +214,7 @@ function gerarRelatorio5S(aud, emitente) {
     const avaliados = SENSOS.map(s => ({ s, v: sc[s.id] })).filter(x => x.v != null);
     const melhor = avaliados.length ? avaliados.reduce((a, b) => (b.v > a.v ? b : a)) : null;
     const pior = avaliados.length ? avaliados.reduce((a, b) => (b.v < a.v ? b : a)) : null;
-    const criticos = SENSOS.flatMap(s => s.itens.filter(it => respostas[it.id] != null && respostas[it.id] <= 2).map(it => ({ senso: s, it, nota: respostas[it.id] })));
+    const criticos = SENSOS.flatMap(s => s.itens.filter(it => !it.emAvaliacao && !it.desabilitado && respostas[it.id] != null && respostas[it.id] <= 2).map(it => ({ senso: s, it, nota: respostas[it.id] })));
     const planos = aud.planos || [];
     const planosAbertos = planos.filter(p => p.status !== 'concluida');
 
@@ -278,6 +278,13 @@ function gerarRelatorio5S(aud, emitente) {
     // Detalhamento por grupo (reutilizável p/ 5S e SOL)
     const detalheDe = (grupos, scoresObj) => grupos.map(s => {
         const linhas = s.itens.map(it => {
+            if (it.emAvaliacao || it.desabilitado) {
+                return `<tr>
+                    <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;font-size:11px">${esc(it.label)} <span style="display:inline-block;margin-left:6px;font-size:9px;color:#64748b;background:#f1f5f9;border:1px solid #e2e8f0;padding:1px 6px;border-radius:4px">Em avaliação</span><div style="font-size:9.5px;color:#94a3b8;font-weight:400;margin-top:1px">${esc(it.desc)}</div></td>
+                    <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;text-align:center;vertical-align:top;width:70px">
+                        <span style="display:inline-flex;padding:3px 7px;border-radius:6px;background:#f1f5f9;color:#64748b;font-size:10px;font-weight:800">Em avaliação</span>
+                        <div style="font-size:8.5px;color:#94a3b8;margin-top:2px">não pontuável</div></td></tr>`;
+            }
             const n = respostas[it.id];
             const obs = aud.observacoes?.[it.id] || '';
             const fts = aud.fotos?.[it.id] || [];
@@ -445,11 +452,12 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
     const [iaEditing, setIaEditing] = useState(false);
     const [iaDraft, setIaDraft] = useState('');
     const [iaErr, setIaErr] = useState('');
+    const [infoItem, setInfoItem] = useState(null);
     const fileRefs = useRef({});
 
-    const countResp = (grupos) => grupos.reduce((s, x) => s + x.itens.filter(it => respostas[it.id] != null && respostas[it.id] !== '').length, 0);
-    const total5S = SENSOS.reduce((s, x) => s + x.itens.length, 0);
-    const totalSOL = SOL_PILARES.reduce((s, x) => s + x.itens.length, 0);
+    const countResp = (grupos) => grupos.reduce((s, x) => s + x.itens.filter(it => !it.emAvaliacao && !it.desabilitado && respostas[it.id] != null && respostas[it.id] !== '').length, 0);
+    const total5S = SENSOS.reduce((s, x) => s + x.itens.filter(it => !it.emAvaliacao && !it.desabilitado).length, 0);
+    const totalSOL = SOL_PILARES.reduce((s, x) => s + x.itens.filter(it => !it.emAvaliacao && !it.desabilitado).length, 0);
     const totalItens = total5S + totalSOL;
     const respondidos = countResp(SENSOS) + countResp(SOL_PILARES);
     const sc = scores5S(respostas);           // 5S (radar + geral)
@@ -497,21 +505,48 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
             </div>
             <div style={{ fontSize: '0.68rem', color: 'var(--color-text-muted)', marginBottom: '0.6rem' }}>{g.conceito}</div>
             {g.itens.map(it => {
+                const emAvaliacao = Boolean(it.emAvaliacao || it.desabilitado);
                 const nota = respostas[it.id];
-                const critico = nota != null && nota <= 2;
+                const critico = !emAvaliacao && nota != null && nota <= 2;
                 return (
-                    <div key={it.id} style={{ background: 'var(--bg-surface-glass)', border: `1px solid ${critico ? '#DC262655' : 'var(--border-color-dark)'}`, borderRadius: 10, padding: '0.7rem 0.85rem', marginBottom: '0.55rem' }}>
+                    <div key={it.id} style={{ background: 'var(--bg-surface-glass)', border: `1px solid ${critico ? '#DC262655' : 'var(--border-color-dark)'}`, borderRadius: 10, padding: '0.7rem 0.85rem', marginBottom: '0.55rem', opacity: emAvaliacao ? 0.9 : 1 }}>
                         <div style={{ display: 'flex', alignItems: isMobile ? 'stretch' : 'center', gap: isMobile ? '0.5rem' : '0.9rem', flexDirection: isMobile ? 'column' : 'row' }}>
                             <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-main)' }}>{it.label}</div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-main)' }}>{it.label}</span>
+                                    {emAvaliacao && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setInfoItem(it)}
+                                            title="Clique para ver o status deste critério"
+                                            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', background: 'rgba(59, 130, 246, 0.12)', border: '1px solid rgba(59, 130, 246, 0.35)', borderRadius: 6, padding: '0.12rem 0.45rem', color: '#60A5FA', fontSize: '0.62rem', fontWeight: 800, cursor: 'pointer', letterSpacing: '0.3px', textTransform: 'uppercase' }}
+                                        >
+                                            <FaInfoCircle size={10} /> Em avaliação
+                                        </button>
+                                    )}
+                                </div>
                                 <div style={{ fontSize: '0.68rem', color: 'var(--color-text-muted)', marginTop: 2, lineHeight: 1.3 }}>{it.desc}</div>
                             </div>
-                            <div style={{ display: 'flex', gap: '0.3rem', flexShrink: 0 }}>
-                                {[0, 1, 2, 3, 4, 5].map(n => (
-                                    <button key={n} onClick={() => setNota(it.id, n)} title={`${n} · ${ESCALA_5S[n].rotulo}: ${ESCALA_5S[n].desc}`}
-                                        style={{ flex: isMobile ? 1 : 'none', width: isMobile ? 'auto' : 38, height: isMobile ? 42 : 36, borderRadius: 8, border: `1.5px solid ${nota === n ? notaCor(n) : 'var(--border-color-dark)'}`, background: nota === n ? notaCor(n) : 'transparent', color: nota === n ? '#fff' : 'var(--color-text-muted)', fontSize: '0.82rem', fontWeight: 900, cursor: 'pointer', transition: 'all 0.12s' }}>{n}</button>
-                                ))}
-                            </div>
+                            {emAvaliacao ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(255,255,255,0.03)', border: '1px dashed var(--border-color-dark)', borderRadius: 8, padding: '0.4rem 0.75rem', color: 'var(--color-text-muted)', fontSize: '0.72rem', fontWeight: 700, flexShrink: 0 }}>
+                                    <button
+                                        type="button"
+                                        onClick={() => setInfoItem(it)}
+                                        style={{ background: 'none', border: 'none', color: '#60A5FA', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.35rem', padding: 0, fontSize: '0.72rem', fontWeight: 700 }}
+                                        title="Clique para mais detalhes"
+                                    >
+                                        <FaInfoCircle size={12} />
+                                        <span>Não pontuável</span>
+                                    </button>
+                                </div>
+                            ) : (
+                                <div style={{ display: 'flex', gap: '0.3rem', flexShrink: 0 }}>
+                                    {[0, 1, 2, 3, 4, 5].map(n => (
+                                        <button key={n} onClick={() => setNota(it.id, n)} title={`${n} · ${ESCALA_5S[n].rotulo}: ${ESCALA_5S[n].desc}`}
+                                            style={{ flex: isMobile ? 1 : 'none', width: isMobile ? 'auto' : 38, height: isMobile ? 42 : 36, borderRadius: 8, border: `1.5px solid ${nota === n ? notaCor(n) : 'var(--border-color-dark)'}`, background: nota === n ? notaCor(n) : 'transparent', color: nota === n ? '#fff' : 'var(--color-text-muted)', fontSize: '0.82rem', fontWeight: 900, cursor: 'pointer', transition: 'all 0.12s' }}>{n}</button>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                         {critico && (
                             <div style={{ marginTop: '0.6rem', display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
@@ -677,6 +712,30 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
                     {saving ? <FaSync className="spin" size={12} /> : <FaCheckCircle size={13} />} Concluir auditoria
                 </button>
             </div>
+            {/* Modal de informação sobre item em avaliação */}
+            {infoItem && (
+                <ModalShell
+                    title="Item em Avaliação"
+                    onClose={() => setInfoItem(null)}
+                    footer={<button onClick={() => setInfoItem(null)} style={btnPrim}>Entendido</button>}
+                >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+                            <div style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(59, 130, 246, 0.18)', color: '#60A5FA', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                <FaInfoCircle size={20} />
+                            </div>
+                            <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: '0.92rem', fontWeight: 800, color: 'var(--color-text-main)' }}>{infoItem.label}</div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)', marginTop: 2 }}>{infoItem.desc}</div>
+                            </div>
+                        </div>
+                        <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border-color-dark)', borderRadius: 10, padding: '0.9rem 1rem', fontSize: '0.82rem', color: 'var(--color-text-main)', lineHeight: 1.5 }}>
+                            ℹ️ <b>Status do critério:</b> {infoItem.infoMsg || 'Este item está temporariamente em avaliação. Ele permanece visível para consulta, mas não é pontuável nem contabilizado no cálculo dos scores da auditoria nesta fase.'}
+                        </div>
+                    </div>
+                </ModalShell>
+            )}
+
             <style>{`@keyframes spin{to{transform:rotate(360deg)}}.spin{animation:spin 1s linear infinite}`}</style>
         </div>
     );

@@ -60,7 +60,13 @@ export const SENSOS = [
             { id: 's5_espontaneo', label: 'Cumprimento espontâneo dos padrões', desc: 'Colaboradores seguem os padrões do 5S/SOL espontaneamente (observação direta: organização, limpeza e disciplina no posto da máquina).' },
             { id: 's5_acoes_ant', label: 'Cumprimento das ações de auditorias anteriores', desc: 'Plano de ação de auditorias anteriores realizados. (Verificar relatórios antigos)' },
             { id: 's5_equipe', label: 'Equipe conhece e participa do 5S/SOL', desc: 'Operadores demonstram conhecimento do 5S/SOL (entrevista rápida no posto) e conseguem apontar participação em melhorias recentes.' },
-            { id: 's5_melhorias', label: 'Melhorias da linha visíveis e atualizadas', desc: 'Quadro de sugestões/kaizens da linha visível no posto ; operador consegue apontar melhorias.' },
+            {
+                id: 's5_melhorias',
+                label: 'Melhorias da linha visíveis e atualizadas',
+                desc: 'Quadro de sugestões/kaizens da linha visível no posto ; operador consegue apontar melhorias.',
+                emAvaliacao: true,
+                infoMsg: 'Este item está temporariamente em avaliação. Ele permanece visível para consulta, mas não é pontuado nem contabilizado no cálculo dos scores nesta fase.',
+            },
         ],
     },
 ];
@@ -103,10 +109,12 @@ export const SOL_PILARES = [
 export const getItens5SFlat = () => SENSOS.flatMap(s => s.itens.map(it => ({ ...it, senso: s.id, sensoNome: s.nome, sensoNum: s.num, cor: s.cor })));
 
 // Score de um senso (0-100) a partir do mapa de respostas { item_id: 0..5 }
+// Itens em avaliação / desabilitados não entram na contagem de pontos nem no total de critérios
 export const scoreSenso = (senso, respostas) => {
-    const notas = senso.itens.map(it => respostas?.[it.id]).filter(n => n != null && n !== '');
-    if (!notas.length) return null;
-    return Math.round((notas.reduce((s, n) => s + Number(n), 0) / (notas.length * 5)) * 100);
+    const itensAtivos = (senso.itens || []).filter(it => !it.emAvaliacao && !it.desabilitado);
+    const notas = itensAtivos.map(it => respostas?.[it.id]).filter(n => n != null && n !== '');
+    if (!notas.length || !itensAtivos.length) return null;
+    return Math.round((notas.reduce((s, n) => s + Number(n), 0) / (itensAtivos.length * 5)) * 100);
 };
 
 // Scores completos: { seiri: 80, ..., geral: 76 } (geral = média dos sensos avaliados)

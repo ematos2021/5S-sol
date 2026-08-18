@@ -19,7 +19,7 @@ export async function gerarResumoExecutivo(aud, sc, scSol, solar) {
   }));
 
   const criticos = [...SENSOS, ...SOL_PILARES].flatMap(g => (g.itens || [])
-    .filter(it => aud.respostas?.[it.id] != null && aud.respostas[it.id] <= 2)
+    .filter(it => !it.emAvaliacao && !it.desabilitado && aud.respostas?.[it.id] != null && aud.respostas[it.id] <= 2)
     .map(it => `${it.label} (nota ${aud.respostas[it.id]}${aud.observacoes?.[it.id] ? ` — ${aud.observacoes[it.id]}` : ''})`));
 
   const planos = aud.planos || [];
