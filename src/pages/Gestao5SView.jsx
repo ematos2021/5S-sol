@@ -10,6 +10,7 @@ import {
     FaChartPie, FaListUl, FaMapMarkedAlt, FaCamera, FaArrowLeft, FaCheckCircle,
     FaIndustry, FaExclamationTriangle, FaBolt, FaGraduationCap, FaClipboardCheck, FaFilePdf,
     FaSun, FaShieldAlt, FaHardHat, FaTrophy, FaMagic, FaRobot, FaSave, FaPen, FaSpinner, FaCalendarAlt, FaInfoCircle,
+    FaSearch, FaFilter, FaLayerGroup, FaArrowUp, FaArrowDown, FaEye, FaBuilding,
 } from 'react-icons/fa';
 
 const ACCENT = '#22C55E';
@@ -787,6 +788,11 @@ export default function Gestao5SView() {
     const toggleSetor = (k) => setOpenSetores(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
     const [collapsedAud, setCollapsedAud] = useState(() => new Set()); // setores recolhidos na aba Auditorias (abertos por padrão)
     const toggleAud = (k) => setCollapsedAud(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
+    const [fabricaInd, setFabricaInd] = useState('todas'); // filtro de fábrica em Indicadores
+    const [statusInd, setStatusInd] = useState('todas'); // todas | auditadas | excelencia | atencao | sem_auditoria
+    const [buscaInd, setBuscaInd] = useState('');
+    const [ordemInd, setOrdemInd] = useState('pior'); // pior | melhor | recente | nome
+    const [buscaSetorRank, setBuscaSetorRank] = useState('');
 
     const showMsg = (text, type = 'success') => { setMsg({ text, type }); setTimeout(() => setMsg(null), 2800); };
 
@@ -1006,6 +1012,68 @@ export default function Gestao5SView() {
     })();
     // Mural do Sol: áreas que "viram o sol nascer" (índice solar ≥ 85), ranqueadas
     const muralSol = auditadas.filter(m => (solarDe(m.ult) ?? 0) >= 85).sort((a, b) => (solarDe(b.ult) - solarDe(a.ult)));
+
+    // ── Diagnóstico estruturado por Fábrica (Fábrica 1, 2, 3...) em Indicadores ──
+    const fabricasLista = (() => {
+        const set = new Set();
+        areasCadastro.forEach(a => { if (a.fabrica) set.add(a.fabrica.trim()); });
+        auditorias.forEach(a => { if (a.fabrica) set.add(a.fabrica.trim()); });
+        if (set.size === 0) {
+            ['FÁBRICA 1', 'FÁBRICA 2', 'FÁBRICA 3'].forEach(f => set.add(f));
+        }
+        return [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    })();
+
+    const metricasFabricaSel = (() => {
+        const base = mapa.filter(m => fabricaInd === 'todas' || norm(m.fabrica) === norm(fabricaInd));
+        const auditadasF = base.filter(m => m.ult);
+        const solarM = auditadasF.length ? Math.round(auditadasF.reduce((s, m) => s + (solarDe(m.ult) || 0), 0) / auditadasF.length) : null;
+        const s5M = auditadasF.length ? Math.round(auditadasF.reduce((s, m) => s + (m.ult.score || 0), 0) / auditadasF.length) : null;
+        const solM = auditadasF.length ? Math.round(auditadasF.reduce((s, m) => s + (m.ult.scores?.sol_geral || 0), 0) / auditadasF.length) : null;
+        const acoes = base.reduce((s, m) => s + (m.acoesAbertas || 0), 0);
+        const cob = Math.round((auditadasF.length / (base.length || 1)) * 100);
+        return {
+            total: base.length,
+            auditadas: auditadasF.length,
+            solarM,
+            s5M,
+            solM,
+            acoes,
+            cob,
+        };
+    })();
+
+    const areasFabricaFiltradas = (() => {
+        return mapa.filter(m => {
+            if (fabricaInd !== 'todas' && norm(m.fabrica) !== norm(fabricaInd)) return false;
+            
+            if (buscaInd.trim()) {
+                const q = norm(buscaInd);
+                const str = `${norm(m.fabrica)} ${norm(m.setor)} ${norm(m.maquina)}`;
+                if (!str.includes(q)) return false;
+            }
+
+            const score = m.ult ? solarDe(m.ult) : null;
+            if (statusInd === 'auditadas' && !m.ult) return false;
+            if (statusInd === 'excelencia' && (score == null || score < 85)) return false;
+            if (statusInd === 'atencao' && (score == null || score >= 70)) return false;
+            if (statusInd === 'sem_auditoria' && m.ult) return false;
+
+            return true;
+        }).sort((a, b) => {
+            const scA = a.ult ? solarDe(a.ult) : -1;
+            const scB = b.ult ? solarDe(b.ult) : -1;
+            if (ordemInd === 'pior') return scA - scB;
+            if (ordemInd === 'melhor') return scB - scA;
+            if (ordemInd === 'nome') return `${a.fabrica} ${a.setor} ${a.maquina || ''}`.localeCompare(`${b.fabrica} ${b.setor} ${b.maquina || ''}`);
+            if (ordemInd === 'recente') {
+                const da = new Date(a.ult?.data_auditoria || a.ult?.created_at || 0).getTime();
+                const db = new Date(b.ult?.data_auditoria || b.ult?.created_at || 0).getTime();
+                return db - da;
+            }
+            return 0;
+        });
+    })();
 
     // Quem mais audita — ranking por auditorias concluídas
     const porAuditor = {};
@@ -1300,107 +1368,419 @@ export default function Gestao5SView() {
 
                 {/* ── INDICADORES ── */}
                 {tab === 'indicadores' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'auto 1fr', gap: '1rem', alignItems: 'start' }}>
-                            <div className="glass-panel" style={{ borderRadius: 13, border: '1px solid var(--border-color-dark)', padding: '1.1rem', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                                <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '0.5rem' }}>Radar médio do parque</div>
-                                <Radar5S scores={radarMedio} size={220} />
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', justifyContent: 'center', marginTop: '0.5rem' }}>
-                                    {SENSOS.map(s => <span key={s.id} style={{ fontSize: '0.6rem', fontWeight: 700, color: s.cor }}>{s.num} {s.nome.split('·')[1]}</span>)}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
+
+                        {/* ══════════════════════════════════════════════════════════════════════════════════
+                            1. SEÇÃO DE DIAGNÓSTICO POR FÁBRICA (FÁBRICA 1, 2, 3 E TODAS) COM FILTROS
+                        ══════════════════════════════════════════════════════════════════════════════════ */}
+                        <div className="glass-panel" style={{ borderRadius: 16, border: '1px solid var(--border-color-dark)', padding: '1.2rem', background: 'linear-gradient(145deg, rgba(34,197,94,0.04), transparent 50%), var(--bg-surface-glass)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.8rem', marginBottom: '1rem' }}>
+                                <div>
+                                    <div style={{ fontSize: '0.98rem', fontWeight: 900, color: 'var(--color-text-main)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        <FaIndustry color={ACCENT} size={15} /> Diagnóstico por Fábrica & Áreas
+                                    </div>
+                                    <div style={{ fontSize: '0.68rem', color: 'var(--color-text-muted)', marginTop: 2 }}>
+                                        Visão aprofundada de desempenho, cobertura e planos de ação por planta fabril
+                                    </div>
+                                </div>
+                                
+                                {/* Seletor de Fábrica */}
+                                <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                    <button
+                                        type="button"
+                                        onClick={() => setFabricaInd('todas')}
+                                        style={{
+                                            padding: '0.4rem 0.85rem',
+                                            borderRadius: 9,
+                                            border: `1.5px solid ${fabricaInd === 'todas' ? ACCENT : 'var(--border-color-dark)'}`,
+                                            background: fabricaInd === 'todas' ? `${ACCENT}22` : 'transparent',
+                                            color: fabricaInd === 'todas' ? ACCENT : 'var(--color-text-muted)',
+                                            fontSize: '0.74rem',
+                                            fontWeight: 800,
+                                            cursor: 'pointer',
+                                            transition: 'all 0.15s'
+                                        }}
+                                    >
+                                        🌐 Todas as Fábricas ({mapa.length})
+                                    </button>
+                                    {fabricasLista.map(f => {
+                                        const countF = mapa.filter(m => norm(m.fabrica) === norm(f)).length;
+                                        const isSel = norm(fabricaInd) === norm(f);
+                                        return (
+                                            <button
+                                                key={f}
+                                                type="button"
+                                                onClick={() => setFabricaInd(f)}
+                                                style={{
+                                                    padding: '0.4rem 0.85rem',
+                                                    borderRadius: 9,
+                                                    border: `1.5px solid ${isSel ? ACCENT : 'var(--border-color-dark)'}`,
+                                                    background: isSel ? `${ACCENT}22` : 'transparent',
+                                                    color: isSel ? ACCENT : 'var(--color-text-muted)',
+                                                    fontSize: '0.74rem',
+                                                    fontWeight: 800,
+                                                    cursor: 'pointer',
+                                                    transition: 'all 0.15s'
+                                                }}
+                                            >
+                                                🏭 {f} ({countF})
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                             </div>
-                            <div className="glass-panel" style={{ borderRadius: 13, border: '1px solid var(--border-color-dark)', padding: '1.1rem' }}>
-                                <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '0.2rem' }}>Ranking dos setores (Índice Solar)</div>
-                                <div style={{ fontSize: '0.62rem', color: 'var(--color-text-subtle)', marginBottom: '0.7rem' }}>Média das linhas/máquinas auditadas de cada setor</div>
-                                {mapaSetores.filter(s => s.mediaSolar != null).length === 0 ? <div style={{ fontSize: '0.76rem', color: 'var(--color-text-muted)' }}>Conclua auditorias para gerar o ranking.</div> : (
-                                    [...mapaSetores].filter(s => s.mediaSolar != null).sort((a, b) => b.mediaSolar - a.mediaSolar).map((s, i) => (
-                                        <div key={`${s.planta}|${s.fabrica}|${s.setor}`} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.4rem' }}>
-                                            <span style={{ width: 22, fontSize: '0.66rem', color: 'var(--color-text-subtle)', fontWeight: 800, textAlign: 'right' }}>{i + 1}º</span>
-                                            <span style={{ width: isMobile ? 120 : 180, fontSize: '0.72rem', color: 'var(--color-text-main)', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.fabrica} · {s.setor}</span>
-                                            <div style={{ flex: 1, height: 14, background: 'rgba(255,255,255,0.06)', borderRadius: 7, overflow: 'hidden' }}>
-                                                <div style={{ width: `${s.mediaSolar}%`, height: '100%', background: scoreCor(s.mediaSolar), borderRadius: 7, transition: 'width 0.4s' }} />
+
+                            {/* Resumo Executivo da Fábrica Selecionada */}
+                            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.7rem', marginBottom: '1.1rem' }}>
+                                <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border-color-dark)', borderRadius: 12, padding: '0.75rem 0.9rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                    <div style={{ width: 38, height: 38, borderRadius: 10, background: `${solSelo(metricasFabricaSel.solarM).cor}22`, color: solSelo(metricasFabricaSel.solarM).cor, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '1.2rem' }}>
+                                        {solSelo(metricasFabricaSel.solarM).emoji}
+                                    </div>
+                                    <div>
+                                        <div style={{ fontSize: '1.15rem', fontWeight: 900, color: scoreCor(metricasFabricaSel.solarM), lineHeight: 1 }}>{metricasFabricaSel.solarM != null ? `${metricasFabricaSel.solarM}%` : '—'}</div>
+                                        <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', fontWeight: 700, textTransform: 'uppercase', marginTop: 3 }}>Índice Solar Fábrica</div>
+                                    </div>
+                                </div>
+
+                                <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border-color-dark)', borderRadius: 12, padding: '0.75rem 0.9rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                    <div style={{ width: 38, height: 38, borderRadius: 10, background: `${ACCENT}22`, color: ACCENT, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                        <FaBroom size={16} />
+                                    </div>
+                                    <div>
+                                        <div style={{ fontSize: '1.15rem', fontWeight: 900, color: scoreCor(metricasFabricaSel.s5M), lineHeight: 1 }}>{metricasFabricaSel.s5M != null ? `${metricasFabricaSel.s5M}%` : '—'}</div>
+                                        <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', fontWeight: 700, textTransform: 'uppercase', marginTop: 3 }}>Score 5S Médio</div>
+                                    </div>
+                                </div>
+
+                                <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border-color-dark)', borderRadius: 12, padding: '0.75rem 0.9rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                    <div style={{ width: 38, height: 38, borderRadius: 10, background: `${SOL_ACCENT}22`, color: SOL_ACCENT, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                        <FaSun size={16} />
+                                    </div>
+                                    <div>
+                                        <div style={{ fontSize: '1.15rem', fontWeight: 900, color: scoreCor(metricasFabricaSel.solM), lineHeight: 1 }}>{metricasFabricaSel.solM != null ? `${metricasFabricaSel.solM}%` : '—'}</div>
+                                        <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', fontWeight: 700, textTransform: 'uppercase', marginTop: 3 }}>Score SOL Médio</div>
+                                    </div>
+                                </div>
+
+                                <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border-color-dark)', borderRadius: 12, padding: '0.75rem 0.9rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                    <div style={{ width: 38, height: 38, borderRadius: 10, background: '#3B82F622', color: '#60A5FA', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                        <FaMapMarkedAlt size={16} />
+                                    </div>
+                                    <div>
+                                        <div style={{ fontSize: '1.15rem', fontWeight: 900, color: '#60A5FA', lineHeight: 1 }}>{metricasFabricaSel.auditadas}/{metricasFabricaSel.total}</div>
+                                        <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', fontWeight: 700, textTransform: 'uppercase', marginTop: 3 }}>Cobertura ({metricasFabricaSel.cob}%)</div>
+                                    </div>
+                                </div>
+
+                                <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border-color-dark)', borderRadius: 12, padding: '0.75rem 0.9rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                    <div style={{ width: 38, height: 38, borderRadius: 10, background: metricasFabricaSel.acoes > 0 ? '#D9770622' : '#16A34A22', color: metricasFabricaSel.acoes > 0 ? '#D97706' : '#16A34A', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                        <FaBolt size={16} />
+                                    </div>
+                                    <div>
+                                        <div style={{ fontSize: '1.15rem', fontWeight: 900, color: metricasFabricaSel.acoes > 0 ? '#D97706' : '#16A34A', lineHeight: 1 }}>{metricasFabricaSel.acoes}</div>
+                                        <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', fontWeight: 700, textTransform: 'uppercase', marginTop: 3 }}>Ações Pendentes</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Barra de Filtros e Busca de Áreas */}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', flexWrap: 'wrap', background: 'rgba(0,0,0,0.2)', padding: '0.65rem 0.85rem', borderRadius: 12, border: '1px solid var(--border-color-dark)', marginBottom: '1rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: isMobile ? '1 1 100%' : '1', minWidth: isMobile ? '100%' : 220 }}>
+                                    <FaSearch size={12} color="var(--color-text-muted)" />
+                                    <input
+                                        type="text"
+                                        placeholder="Buscar setor, linha ou máquina…"
+                                        value={buscaInd}
+                                        onChange={e => setBuscaInd(e.target.value)}
+                                        style={{ ...inputSty, padding: '0.35rem 0.6rem', fontSize: '0.75rem' }}
+                                    />
+                                    {buscaInd && (
+                                        <button onClick={() => setBuscaInd('')} style={{ background: 'none', border: 'none', color: 'var(--color-text-muted)', cursor: 'pointer' }}>
+                                            <FaTimes size={11} />
+                                        </button>
+                                    )}
+                                </div>
+
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: '0.64rem', fontWeight: 700, color: 'var(--color-text-subtle)', textTransform: 'uppercase' }}>Status:</span>
+                                    {[
+                                        ['todas', 'Todas'],
+                                        ['auditadas', 'Auditadas'],
+                                        ['excelencia', 'Sol Pleno ☀️'],
+                                        ['atencao', 'Atenção ⚠️'],
+                                        ['sem_auditoria', 'Sem Auditoria 🌑']
+                                    ].map(([k, lbl]) => (
+                                        <button
+                                            key={k}
+                                            type="button"
+                                            onClick={() => setStatusInd(k)}
+                                            style={{
+                                                fontSize: '0.65rem',
+                                                fontWeight: 800,
+                                                padding: '0.22rem 0.55rem',
+                                                borderRadius: 6,
+                                                border: `1px solid ${statusInd === k ? ACCENT : 'var(--border-color-dark)'}`,
+                                                background: statusInd === k ? `${ACCENT}22` : 'transparent',
+                                                color: statusInd === k ? ACCENT : 'var(--color-text-muted)',
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            {lbl}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    <span style={{ fontSize: '0.64rem', fontWeight: 700, color: 'var(--color-text-subtle)', textTransform: 'uppercase' }}>Ordem:</span>
+                                    <select
+                                        value={ordemInd}
+                                        onChange={e => setOrdemInd(e.target.value)}
+                                        style={{ ...inputSty, width: 'auto', padding: '0.25rem 0.5rem', fontSize: '0.72rem', fontWeight: 700 }}
+                                    >
+                                        <option value="pior">Pior Score Primeiro</option>
+                                        <option value="melhor">Melhor Score Primeiro</option>
+                                        <option value="recente">Mais Recente</option>
+                                        <option value="nome">Nome A-Z</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            {/* Grid das Áreas da Fábrica */}
+                            {areasFabricaFiltradas.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
+                                    Nenhuma área encontrada com os filtros selecionados.
+                                </div>
+                            ) : (
+                                <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? '100%' : '260px'}, 1fr))`, gap: '0.75rem' }}>
+                                    {areasFabricaFiltradas.map(m => {
+                                        const score = m.ult ? solarDe(m.ult) : null;
+                                        const selo = solSelo(score);
+                                        const diasAtraso = m.ult ? Math.round((Date.now() - new Date(String(m.ult.data_auditoria || m.ult.created_at).slice(0, 10) + 'T12:00:00')) / 86400000) : null;
+                                        const atrasada = diasAtraso != null && diasAtraso > 30;
+
+                                        return (
+                                            <div
+                                                key={areaKey(m)}
+                                                className="glass-panel"
+                                                style={{
+                                                    borderRadius: 12,
+                                                    border: `1px solid ${m.ult ? `${selo.cor}44` : 'var(--border-color-dark)'}`,
+                                                    padding: '0.85rem',
+                                                    background: 'var(--bg-app)',
+                                                    display: 'flex',
+                                                    flexDirection: 'column',
+                                                    justifyContent: 'space-between',
+                                                    gap: '0.6rem'
+                                                }}
+                                            >
+                                                <div>
+                                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.4rem', marginBottom: '0.35rem' }}>
+                                                        <span style={{ fontSize: '0.58rem', fontWeight: 800, color: ACCENT, background: `${ACCENT}18`, borderRadius: 4, padding: '0.1rem 0.4rem', textTransform: 'uppercase' }}>
+                                                            {m.fabrica}
+                                                        </span>
+                                                        <SolSeloPill value={score} small />
+                                                    </div>
+
+                                                    <div style={{ fontSize: '0.88rem', fontWeight: 900, color: 'var(--color-text-main)', lineHeight: 1.25, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                        {m.maquina || 'Setor inteiro'}
+                                                    </div>
+                                                    <div style={{ fontSize: '0.64rem', color: 'var(--color-text-subtle)', fontWeight: 700, marginTop: 2 }}>
+                                                        {m.setor} · {m.planta}
+                                                    </div>
+                                                </div>
+
+                                                {/* Medidor e Métricas Rápidas */}
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', background: 'rgba(255,255,255,0.02)', padding: '0.45rem 0.6rem', borderRadius: 8, border: '1px solid var(--border-color-dark)' }}>
+                                                    <RingGauge value={score} size={42} stroke={4.5} />
+                                                    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.64rem', fontWeight: 800 }}>
+                                                            <span style={{ color: ACCENT }}>5S: {m.ult?.score != null ? `${Math.round(m.ult.score)}%` : '—'}</span>
+                                                            <span style={{ color: SOL_ACCENT }}>SOL: {m.ult?.scores?.sol_geral != null ? `${m.ult.scores.sol_geral}%` : '—'}</span>
+                                                        </div>
+                                                        <div style={{ fontSize: '0.58rem', color: 'var(--color-text-muted)' }}>
+                                                            {m.ult ? `Última: ${fmtData(m.ult.data_auditoria)}` : 'Nunca auditada'}
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                {/* Detalhes de status & Ações */}
+                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.62rem', color: 'var(--color-text-muted)' }}>
+                                                    <div>
+                                                        {atrasada && <span style={{ color: '#DC2626', fontWeight: 800 }}>⚠️ +30 dias</span>}
+                                                        {!atrasada && diasAtraso != null && <span>Há {diasAtraso} dia(s)</span>}
+                                                        {m.acoesAbertas > 0 && <span style={{ marginLeft: 6, color: '#D97706', fontWeight: 800 }}>{m.acoesAbertas} ação(ões)</span>}
+                                                    </div>
+                                                    {m.delta != null && (
+                                                        <span style={{ fontWeight: 800, color: m.delta >= 0 ? '#16A34A' : '#DC2626' }}>
+                                                            {m.delta >= 0 ? '▲' : '▼'} {Math.abs(m.delta)} pts
+                                                        </span>
+                                                    )}
+                                                </div>
+
+                                                {/* Botões de Ação */}
+                                                <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.2rem' }}>
+                                                    {m.ult && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setSel(m.ult)}
+                                                            style={{ ...btnSec, flex: 1, padding: '0.35rem 0.5rem', fontSize: '0.66rem', justifyContent: 'center' }}
+                                                            title="Visualizar última auditoria"
+                                                        >
+                                                            <FaEye size={10} /> Ver
+                                                        </button>
+                                                    )}
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => { setNovaPrefill({ planta: m.planta, fabrica: m.fabrica, setor: m.setor, maquina: m.maquina }); setShowNova(true); }}
+                                                        style={{ ...btnPrim, flex: 1.3, padding: '0.35rem 0.5rem', fontSize: '0.68rem', justifyContent: 'center' }}
+                                                    >
+                                                        <FaBroom size={10} /> Auditar
+                                                    </button>
+                                                </div>
                                             </div>
-                                            <span style={{ width: 40, textAlign: 'right', fontSize: '0.74rem', fontWeight: 900, color: scoreCor(s.mediaSolar) }}>{s.mediaSolar}%</span>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* ══════════════════════════════════════════════════════════════════════════════════
+                            2. RADAR MÉDIO DO PARQUE (5S) & RAIOS DO SOL (SOL)
+                        ══════════════════════════════════════════════════════════════════════════════════ */}
+                        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '1rem', alignItems: 'stretch' }}>
+                            <div className="glass-panel" style={{ borderRadius: 14, border: '1px solid var(--border-color-dark)', padding: '1.2rem', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.8rem' }}>
+                                    <div style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--color-text-main)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                        <FaBroom color={ACCENT} size={12} /> Radar 5S Médio do Parque
+                                    </div>
+                                    <span style={{ fontSize: '0.66rem', fontWeight: 800, color: scoreCor(mediaGeral) }}>Geral: {mediaGeral != null ? `${mediaGeral}%` : '—'}</span>
+                                </div>
+                                <Radar5S scores={radarMedio} size={210} />
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', justifyContent: 'center', marginTop: '0.8rem' }}>
+                                    {SENSOS.map(s => (
+                                        <span key={s.id} style={{ fontSize: '0.62rem', fontWeight: 800, color: s.cor, background: `${s.cor}18`, border: `1px solid ${s.cor}44`, borderRadius: 6, padding: '0.15rem 0.5rem' }}>
+                                            {s.num} {s.nome.split('·')[1]} {radarMedio[s.id] != null ? `(${radarMedio[s.id]}%)` : ''}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="glass-panel" style={{ borderRadius: 14, border: `1px solid ${SOL_ACCENT}44`, padding: '1.2rem', background: `linear-gradient(135deg, ${SOL_ACCENT}10, transparent 60%)` }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.8rem' }}>
+                                    <div style={{ fontSize: '0.82rem', fontWeight: 800, color: SOL_ACCENT, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                        <FaSun size={13} /> Raios do Sol — Pilares SOL do Parque
+                                    </div>
+                                    <span style={{ fontSize: '0.66rem', fontWeight: 800, color: solSelo(solarMedio).cor }}>Índice Solar: {solarMedio != null ? `${solarMedio}%` : '—'}</span>
+                                </div>
+                                {SOL_PILARES.map(p => (
+                                    <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
+                                        <span style={{ width: isMobile ? 95 : 130, fontSize: '0.74rem', fontWeight: 800, color: p.cor, whiteSpace: 'nowrap' }}>{p.num} · {p.nome}</span>
+                                        <div style={{ flex: 1, height: 14, background: 'rgba(255,255,255,0.06)', borderRadius: 7, overflow: 'hidden' }}>
+                                            <div style={{ width: `${radarSOL[p.id] || 0}%`, height: '100%', background: `linear-gradient(90deg, ${p.cor}, ${p.cor}cc)`, borderRadius: 7, transition: 'width 0.4s' }} />
                                         </div>
-                                    ))
+                                        <span style={{ width: 42, textAlign: 'right', fontSize: '0.76rem', fontWeight: 900, color: scoreCor(radarSOL[p.id]) }}>{radarSOL[p.id] || 0}%</span>
+                                    </div>
+                                ))}
+                                <div style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', marginTop: '0.5rem', lineHeight: 1.4 }}>
+                                    ☀️ O <b>Índice Solar</b> combina os 5 Sensos com a Segurança, Organização e Limpeza & Luz para avaliar a maturidade industrial.
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* ══════════════════════════════════════════════════════════════════════════════════
+                            3. RANKING GERAL DOS SETORES & MURAL DO SOL
+                        ══════════════════════════════════════════════════════════════════════════════════ */}
+                        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.3fr 1fr', gap: '1rem', alignItems: 'start' }}>
+                            <div className="glass-panel" style={{ borderRadius: 14, border: '1px solid var(--border-color-dark)', padding: '1.2rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.8rem' }}>
+                                    <div>
+                                        <div style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--color-text-main)' }}>Ranking dos Setores (Índice Solar)</div>
+                                        <div style={{ fontSize: '0.62rem', color: 'var(--color-text-subtle)' }}>Média consolidada das linhas e máquinas auditadas</div>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                        <FaSearch size={10} color="var(--color-text-muted)" />
+                                        <input
+                                            type="text"
+                                            placeholder="Filtrar ranking…"
+                                            value={buscaSetorRank}
+                                            onChange={e => setBuscaSetorRank(e.target.value)}
+                                            style={{ ...inputSty, width: 130, padding: '0.2rem 0.45rem', fontSize: '0.68rem' }}
+                                        />
+                                    </div>
+                                </div>
+
+                                {mapaSetores.filter(s => s.mediaSolar != null).length === 0 ? (
+                                    <div style={{ fontSize: '0.76rem', color: 'var(--color-text-muted)', padding: '1rem 0' }}>Conclua auditorias para gerar o ranking dos setores.</div>
+                                ) : (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', maxHeight: 360, overflowY: 'auto', paddingRight: '0.2rem' }}>
+                                        {[...mapaSetores]
+                                            .filter(s => s.mediaSolar != null)
+                                            .filter(s => !buscaSetorRank.trim() || `${s.fabrica} ${s.setor}`.toUpperCase().includes(buscaSetorRank.trim().toUpperCase()))
+                                            .sort((a, b) => b.mediaSolar - a.mediaSolar)
+                                            .map((s, i) => {
+                                                const seloS = solSelo(s.mediaSolar);
+                                                return (
+                                                    <div key={`${s.planta}|${s.fabrica}|${s.setor}`} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.35rem 0.5rem', borderRadius: 8, background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color-dark)' }}>
+                                                        <span style={{ width: 22, fontSize: '0.7rem', color: i < 3 ? '#EAB308' : 'var(--color-text-subtle)', fontWeight: 900, textAlign: 'right' }}>
+                                                            {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}º`}
+                                                        </span>
+                                                        <div style={{ width: isMobile ? 110 : 160, minWidth: 0 }}>
+                                                            <div style={{ fontSize: '0.74rem', color: 'var(--color-text-main)', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.setor}</div>
+                                                            <div style={{ fontSize: '0.58rem', color: 'var(--color-text-subtle)' }}>{s.fabrica}</div>
+                                                        </div>
+                                                        <div style={{ flex: 1, height: 12, background: 'rgba(255,255,255,0.06)', borderRadius: 6, overflow: 'hidden' }}>
+                                                            <div style={{ width: `${s.mediaSolar}%`, height: '100%', background: scoreCor(s.mediaSolar), borderRadius: 6, transition: 'width 0.4s' }} />
+                                                        </div>
+                                                        <span style={{ width: 44, textAlign: 'right', fontSize: '0.76rem', fontWeight: 900, color: scoreCor(s.mediaSolar) }}>{s.mediaSolar}%</span>
+                                                    </div>
+                                                );
+                                            })}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="glass-panel" style={{ borderRadius: 14, border: '1px solid var(--border-color-dark)', padding: '1.2rem' }}>
+                                <div style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    <FaTrophy size={13} color="#EAB308" /> Mural do Sol — Excelência (≥ 85%) ☀️
+                                </div>
+                                {muralSol.length === 0 ? (
+                                    <div style={{ fontSize: '0.74rem', color: 'var(--color-text-muted)', lineHeight: 1.5, padding: '1rem 0' }}>
+                                        Nenhuma área atingiu <b>Sol Pleno</b> (Índice Solar ≥ 85%) ainda. A primeira a chegar lá entra no mural como referência!
+                                    </div>
+                                ) : (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', maxHeight: 360, overflowY: 'auto' }}>
+                                        {muralSol.map((m, i) => (
+                                            <div key={areaKey(m)} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.45rem 0.65rem', borderRadius: 8, background: '#EAB30814', border: '1px solid #EAB30833' }}>
+                                                <span style={{ fontSize: '1.1rem' }}>{i === 0 ? '🏆' : '☀️'}</span>
+                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                    <div style={{ fontSize: '0.76rem', fontWeight: 800, color: 'var(--color-text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{areaLabel(m)}</div>
+                                                    <div style={{ fontSize: '0.58rem', color: 'var(--color-text-subtle)' }}>{m.planta}</div>
+                                                </div>
+                                                <SolSeloPill value={solarDe(m.ult)} small />
+                                            </div>
+                                        ))}
+                                    </div>
                                 )}
                             </div>
                         </div>
 
-                        {/* ── Programa SOL: raios (pilares) + Mural do Sol ── */}
-                        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.1fr 1fr', gap: '1rem', alignItems: 'stretch' }}>
-                            <div className="glass-panel" style={{ borderRadius: 13, border: `1px solid ${SOL_ACCENT}44`, padding: '1.1rem', background: `linear-gradient(135deg, ${SOL_ACCENT}10, transparent 60%)` }}>
-                                <div style={{ fontSize: '0.78rem', fontWeight: 800, color: SOL_ACCENT, marginBottom: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}><FaSun size={12} /> Raios do Sol — pilares SOL do parque</div>
-                                {SOL_PILARES.map(p => (
-                                    <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.7rem' }}>
-                                        <span style={{ width: isMobile ? 92 : 130, fontSize: '0.72rem', fontWeight: 800, color: p.cor, whiteSpace: 'nowrap' }}>{p.num} · {p.nome}</span>
-                                        <div style={{ flex: 1, height: 14, background: 'rgba(255,255,255,0.06)', borderRadius: 7, overflow: 'hidden' }}>
-                                            <div style={{ width: `${radarSOL[p.id] || 0}%`, height: '100%', background: `linear-gradient(90deg, ${p.cor}, ${p.cor}cc)`, borderRadius: 7, transition: 'width 0.4s' }} />
-                                        </div>
-                                        <span style={{ width: 40, textAlign: 'right', fontSize: '0.74rem', fontWeight: 900, color: scoreCor(radarSOL[p.id]) }}>{radarSOL[p.id] || 0}%</span>
-                                    </div>
-                                ))}
-                                <div style={{ fontSize: '0.64rem', color: 'var(--color-text-muted)', marginTop: '0.4rem' }}>Índice Solar médio do parque: <b style={{ color: solSelo(solarMedio).cor }}>{solarMedio != null ? `${solarMedio}%` : '—'}</b> · média do 5S com o SOL.</div>
-                            </div>
-                            <div className="glass-panel" style={{ borderRadius: 13, border: '1px solid var(--border-color-dark)', padding: '1.1rem' }}>
-                                <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}><FaTrophy size={12} color="#EAB308" /> Mural do Sol — o sol nasceu aqui ☀️</div>
-                                {muralSol.length === 0 ? (
-                                    <div style={{ fontSize: '0.74rem', color: 'var(--color-text-muted)', lineHeight: 1.5 }}>Nenhuma área em <b>sol pleno</b> (Índice Solar ≥ 85%) ainda. A primeira a chegar lá entra no mural e vira referência!</div>
-                                ) : muralSol.slice(0, 12).map((m, i) => (
-                                    <div key={areaKey(m)} style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', marginBottom: '0.5rem', padding: '0.35rem 0.5rem', borderRadius: 8, background: '#EAB30812' }}>
-                                        <span style={{ fontSize: '1rem' }}>{i === 0 ? '🏆' : '☀️'}</span>
-                                        <span style={{ flex: 1, fontSize: '0.74rem', fontWeight: 700, color: 'var(--color-text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{areaLabel(m)}</span>
-                                        <SolSeloPill value={solarDe(m.ult)} small />
-                                    </div>
-                                ))}
-                                {muralSol.length > 12 && <div style={{ fontSize: '0.66rem', color: 'var(--color-text-muted)', marginTop: '0.3rem' }}>+ {muralSol.length - 12} outra(s) em sol pleno ☀️</div>}
-                            </div>
-                        </div>
-
-                        {/* ── Status de cada área + Quem mais audita ── */}
-                        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.7fr 1fr', gap: '1rem', alignItems: 'start' }}>
-                            <div className="glass-panel" style={{ borderRadius: 13, border: '1px solid var(--border-color-dark)', padding: '1.1rem' }}>
-                                <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '0.2rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}><FaMapMarkedAlt size={12} color={ACCENT} /> Status por setor</div>
-                                <div style={{ fontSize: '0.62rem', color: 'var(--color-text-subtle)', marginBottom: '0.7rem' }}>Detalhe por linha/máquina no Mapa das Áreas</div>
-                                <div style={{ overflowX: 'auto' }}>
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem', minWidth: 440 }}>
-                                        <thead><tr style={{ textAlign: 'left', color: 'var(--color-text-subtle)' }}>
-                                            {['Setor', 'Estágio', 'Solar', 'SOL', 'Cobertura', 'Ações', 'Última'].map((h, i) => <th key={h} style={{ padding: '0.3rem 0.5rem', fontWeight: 700, textAlign: i >= 2 && i <= 5 ? 'center' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}
-                                        </tr></thead>
-                                        <tbody>
-                                            {mapaSetores.map(s => {
-                                                const se = solSelo(s.mediaSolar);
-                                                const cobPct = Math.round((s.auditadas / s.itens.length) * 100);
-                                                return (
-                                                    <tr key={`${s.planta}|${s.fabrica}|${s.setor}`} style={{ borderTop: '1px solid var(--border-color-dark)' }}>
-                                                        <td style={{ padding: '0.4rem 0.5rem' }}>
-                                                            <div style={{ fontWeight: 700, color: 'var(--color-text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 170 }}>{s.fabrica} · {s.setor}</div>
-                                                            <div style={{ fontSize: '0.58rem', color: 'var(--color-text-subtle)' }}>{s.planta}</div>
-                                                        </td>
-                                                        <td style={{ padding: '0.4rem 0.5rem' }}>
-                                                            {s.mediaSolar != null ? <span style={{ color: se.cor, fontWeight: 800, whiteSpace: 'nowrap' }}>{se.emoji} {se.label}</span>
-                                                                : <span style={{ color: 'var(--color-text-subtle)', fontStyle: 'italic' }}>Nunca auditada</span>}
-                                                            {s.atrasada && <span title="Mais de 60 dias sem auditar" style={{ marginLeft: 5, fontSize: '0.56rem', fontWeight: 800, color: '#DC2626', background: '#DC262618', borderRadius: 5, padding: '0.05rem 0.35rem', whiteSpace: 'nowrap' }}>⏰ atrasado</span>}
-                                                        </td>
-                                                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'center', fontWeight: 900, color: scoreCor(s.mediaSolar) }}>{s.mediaSolar != null ? `${s.mediaSolar}%` : '—'}</td>
-                                                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>{s.mediaSol != null ? `${s.mediaSol}%` : '—'}</td>
-                                                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'center', color: cobPct >= 100 ? '#16A34A' : cobPct > 0 ? '#D97706' : 'var(--color-text-subtle)', fontWeight: 700, whiteSpace: 'nowrap' }}>{s.auditadas}/{s.itens.length}</td>
-                                                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'center', fontWeight: 800, color: s.acoes ? '#D97706' : 'var(--color-text-subtle)' }}>{s.acoes || '—'}</td>
-                                                        <td style={{ padding: '0.4rem 0.5rem', color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>{s.ultData ? fmtData(s.ultData) : '—'}</td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
+                        {/* ══════════════════════════════════════════════════════════════════════════════════
+                            4. QUEM MAIS AUDITA & EVOLUÇÃO MENSAL
+                        ══════════════════════════════════════════════════════════════════════════════════ */}
+                        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '1rem', alignItems: 'start' }}>
+                            <div className="glass-panel" style={{ borderRadius: 14, border: '1px solid var(--border-color-dark)', padding: '1.2rem' }}>
+                                <div style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    <FaTrophy size={12} color={ACCENT} /> Quem Mais Audita (Auditores)
                                 </div>
-                            </div>
-                            <div className="glass-panel" style={{ borderRadius: 13, border: '1px solid var(--border-color-dark)', padding: '1.1rem' }}>
-                                <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}><FaTrophy size={12} color={ACCENT} /> Quem mais audita</div>
-                                {rankAuditores.length === 0 ? <div style={{ fontSize: '0.74rem', color: 'var(--color-text-muted)' }}>Conclua auditorias para ver o ranking dos auditores.</div> : (() => {
+                                {rankAuditores.length === 0 ? (
+                                    <div style={{ fontSize: '0.74rem', color: 'var(--color-text-muted)' }}>Conclua auditorias para ver o ranking dos auditores.</div>
+                                ) : (() => {
                                     const maxQ = rankAuditores[0].qtd || 1;
                                     return rankAuditores.map((r, i) => (
                                         <div key={r.nome} style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', marginBottom: '0.5rem' }}>
-                                            <span style={{ width: 20, fontSize: '0.9rem', textAlign: 'center' }}>{i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : <span style={{ fontSize: '0.66rem', color: 'var(--color-text-subtle)', fontWeight: 800 }}>{i + 1}º</span>}</span>
+                                            <span style={{ width: 22, fontSize: '0.9rem', textAlign: 'center' }}>
+                                                {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : <span style={{ fontSize: '0.66rem', color: 'var(--color-text-subtle)', fontWeight: 800 }}>{i + 1}º</span>}
+                                            </span>
                                             <span style={{ flex: 1, minWidth: 0 }}>
                                                 <span style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--color-text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>{r.nome}</span>
                                                 <span style={{ display: 'block', height: 6, borderRadius: 3, marginTop: 2, background: `linear-gradient(90deg, ${ACCENT}, ${ACCENT}77)`, width: `${Math.max(12, (r.qtd / maxQ) * 100)}%` }} />
@@ -1409,15 +1789,15 @@ export default function Gestao5SView() {
                                         </div>
                                     ));
                                 })()}
-                                <div style={{ fontSize: '0.62rem', color: 'var(--color-text-subtle)', marginTop: '0.5rem' }}>Total: {concluidas.length} auditoria(s) concluída(s) · {rankAuditores.length} auditor(es).</div>
+                                <div style={{ fontSize: '0.62rem', color: 'var(--color-text-subtle)', marginTop: '0.6rem' }}>Total: {concluidas.length} auditoria(s) concluída(s) · {rankAuditores.length} auditor(es).</div>
+                            </div>
+
+                            <div className="glass-panel" style={{ borderRadius: 14, border: '1px solid var(--border-color-dark)', padding: '1.2rem' }}>
+                                <div style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '0.8rem' }}>Evolução Mensal do Score Médio</div>
+                                <Evolucao5S auditorias={concluidas} />
                             </div>
                         </div>
 
-                        {/* Evolução mensal */}
-                        <div className="glass-panel" style={{ borderRadius: 13, border: '1px solid var(--border-color-dark)', padding: '1.1rem' }}>
-                            <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '0.8rem' }}>Evolução do score médio (mensal)</div>
-                            <Evolucao5S auditorias={concluidas} />
-                        </div>
                     </div>
                 )}
             </div>
