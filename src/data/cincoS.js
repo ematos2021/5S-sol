@@ -1,6 +1,7 @@
 // ════════════════════════════════════════════════════════════════════════
 //  Programa 5S — definição dos sensos, critérios e escala de avaliação.
-//  Escala ancorada 0–5 por critério; score do senso = média × 20 (0–100%).
+//  Escala ancorada 0–5 por critério; cada nota vale um % (ver PONTOS_NOTA) e o
+//  score do senso é a média desses % (0–100%).
 //  Conteúdo autoral do PRIME, baseado nos conceitos clássicos do 5S.
 // ════════════════════════════════════════════════════════════════════════
 
@@ -160,46 +161,21 @@ export const scoresSOL = (respostas) => {
     return out;
 };
 
-// ── Veto de segurança ────────────────────────────────────────────────────────
-// Segurança não se compensa com organização e limpeza: um desvio grave num item
-// do pilar Segurança trava o Índice Solar num teto, por melhor que seja o resto.
-export const NOTA_VETO_SEGURANCA = 2;   // nota ≤ 2 dispara o veto
-export const TETO_VETO_SEGURANCA = 69;  // teto do Índice Solar (máx. 🌅 Amanhecer)
-
-// Itens de Segurança em nota crítica — [] quando não há veto ativo
-export const vetosSeguranca = (respostas) => {
-    const pilar = SOL_PILARES.find(p => p.id === 'sol_seg');
-    if (!pilar) return [];
-    return pilar.itens
-        .filter(it => !it.emAvaliacao && !it.desabilitado)
-        .map(it => ({ id: it.id, label: it.label, nota: respostas?.[it.id] }))
-        .filter(x => x.nota != null && x.nota !== '' && Number(x.nota) <= NOTA_VETO_SEGURANCA)
-        .map(x => ({ ...x, nota: Number(x.nota) }));
-};
-
 // Índice Solar: combina 5S e SOL (média dos que existirem). É o que faz o sol nascer.
-// Passando `respostas`, aplica o veto de segurança sobre o índice.
-export const indiceSolar = (geral5S, geralSOL, respostas) => {
+export const indiceSolar = (geral5S, geralSOL) => {
     const vals = [geral5S, geralSOL].filter(v => v != null);
-    if (!vals.length) return null;
-    const bruto = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
-    if (respostas && vetosSeguranca(respostas).length) return Math.min(bruto, TETO_VETO_SEGURANCA);
-    return bruto;
+    return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
 };
 
 // Consolida tudo num único objeto de scores (gravado no jsonb `scores`)
 export const scoresIntegrado = (respostas) => {
     const s5 = scores5S(respostas);
     const sol = scoresSOL(respostas);
-    const vetos = vetosSeguranca(respostas);
-    const bruto = indiceSolar(s5.geral, sol.geral);
     return {
         ...s5,                                    // seiri..shitsuke + geral (5S)
         sol_seg: sol.sol_seg, sol_org: sol.sol_org, sol_lim: sol.sol_lim,
         sol_geral: sol.geral,
-        solar: indiceSolar(s5.geral, sol.geral, respostas), // índice combinado (com veto)
-        solar_bruto: bruto,                       // antes do veto — rastreabilidade
-        veto_seguranca: vetos,                    // [] quando não houve veto
+        solar: indiceSolar(s5.geral, sol.geral),  // índice combinado
     };
 };
 
@@ -256,9 +232,6 @@ export const demonstrativoNota = (respostas) => {
 
     return {
         grupos5S, gruposSOL, geral5S, geralSOL,
-        solarBruto: indiceSolar(geral5S, geralSOL),
-        solar: indiceSolar(geral5S, geralSOL, respostas),
-        vetos: vetosSeguranca(respostas),
-        teto: TETO_VETO_SEGURANCA,
+        solar: indiceSolar(geral5S, geralSOL),
     };
 };

@@ -6,7 +6,7 @@ import { gerarResumoExecutivo } from '../services/ia';
 import { entregarRelatorio } from '../services/relatorio';
 import {
     SENSOS, ESCALA_5S, scores5S, SOL_PILARES, scoresSOL, scoresIntegrado, indiceSolar, solSelo,
-    vetosSeguranca, TETO_VETO_SEGURANCA, PONTOS_NOTA, demonstrativoNota,
+    PONTOS_NOTA, demonstrativoNota,
     FAIXA_EXCELENCIA, FAIXA_CONSOLIDA, FAIXA_ATENCAO,
 } from '../data/cincoS';
 import {
@@ -233,15 +233,17 @@ function montarRelatorio5S(aud, emitente) {
     const sc = aud.scores && aud.scores.geral != null ? aud.scores : scores5S(respostas);
     const geral = sc.geral;
     const scSol = scoresSOL(respostas);
-    const solar = aud.scores?.solar != null ? aud.scores.solar : indiceSolar(geral, scSol.geral, respostas);
+    // `solar_bruto` só existe nas auditorias salvas enquanto o veto de segurança
+    // esteve ativo, e guarda o índice sem o teto — que é o valor que vale agora.
+    const solar = aud.scores?.solar_bruto ?? aud.scores?.solar ?? indiceSolar(geral, scSol.geral);
     const selo = solSelo(solar);
-    const vetos = aud.scores?.veto_seguranca ?? vetosSeguranca(respostas);
-    const solarBruto = aud.scores?.solar_bruto ?? indiceSolar(geral, scSol.geral);
     const nowStr = new Date().toLocaleDateString('pt-BR');
     const scCorHex = (s) => s == null ? '#94a3b8' : s >= FAIXA_EXCELENCIA ? '#16a34a' : s >= FAIXA_CONSOLIDA ? '#d97706' : '#dc2626';
     const notaHex = (n) => n == null ? '#94a3b8' : n <= 1 ? '#dc2626' : n === 2 ? '#ea580c' : n === 3 ? '#d97706' : n === 4 ? '#84cc16' : '#16a34a';
 
-    const criticos = SENSOS.flatMap(s => s.itens.filter(it => !it.emAvaliacao && !it.desabilitado && respostas[it.id] != null && respostas[it.id] <= 2).map(it => ({ senso: s, it, nota: respostas[it.id] })));
+    // Conta 5S e SOL: o rótulo do KPI diz "críticos", e um EPI ou dispositivo de
+    // segurança com nota 2 é o mais crítico que existe — ficava de fora.
+    const criticos = [...SENSOS, ...SOL_PILARES].flatMap(s => s.itens.filter(it => !it.emAvaliacao && !it.desabilitado && respostas[it.id] != null && respostas[it.id] <= 2).map(it => ({ senso: s, it, nota: respostas[it.id] })));
     const planos = aud.planos || [];
     const planosAbertos = planos.filter(p => p.status !== 'concluida');
 
@@ -372,7 +374,7 @@ function montarRelatorio5S(aud, emitente) {
         .sheet, .bloco { overflow: visible !important; }
         .bloco { border-radius: 0 !important; }
 
-        /* Blocos curtos (KPIs, caixa do veto, resumo, radar, uma foto) ficam
+        /* Blocos curtos (KPIs, resumo, radar, uma foto) ficam
            inteiros. Blocos longos NÃO levam esta classe — se um bloco maior que a
            página pede para não quebrar, o Chrome joga tudo para a página seguinte
            e deixa uma folha em branco para trás. */
@@ -412,12 +414,6 @@ function montarRelatorio5S(aud, emitente) {
             ${kpi(String(criticos.length), 'Críticos (≤2)', criticos.length ? '#dc2626' : '#16a34a')}
             ${kpi(String(planosAbertos.length), 'Ações abertas', planosAbertos.length ? '#d97706' : '#16a34a')}
         </div>
-
-        ${vetos.length ? `<div class="avoid-break" style="background:#fef2f2;border:1px solid #fecaca;border-left:4px solid #dc2626;border-radius:8px;padding:10px 14px;margin:8px 0 6px">
-            <div style="font-size:12px;font-weight:900;color:#991b1b">🛑 Índice Solar bloqueado por desvio de segurança</div>
-            <div style="font-size:11px;color:#7f1d1d;margin-top:3px;line-height:1.5">O índice calculado foi <b>${solarBruto}%</b>, mas fica limitado a <b>${TETO_VETO_SEGURANCA}%</b> enquanto houver item do pilar Segurança com nota ≤ 2. Segurança não é compensada por organização ou limpeza.</div>
-            <div style="font-size:11px;color:#7f1d1d;margin-top:5px">${vetos.map(v => `• <b>${esc(v.label)}</b> — nota ${v.nota}`).join('<br/>')}</div>
-        </div>` : ''}
 
         ${(aud.analise_ia || '').trim() ? `${h2('🤖 Resumo Executivo')}
         <div class="avoid-break" style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:8px;padding:12px 16px;margin-bottom:6px">
@@ -468,9 +464,9 @@ function montarRelatorio5S(aud, emitente) {
 /*
  * Com a curva progressiva (nota 3 = 45%, 4 = 72%) o número final deixou de ser
  * uma conta que a área faz de cabeça. Esta tabela mostra cada etapa: quanto cada
- * nota virou de ponto, a média de cada senso, como 5S e SOL se combinam e onde o
- * veto de segurança entrou. Fica no formulário para o auditor ter a resposta
- * pronta quando perguntarem "de onde saiu esse número?".
+ * nota virou de ponto, a média de cada senso e como 5S e SOL se combinam. Fica
+ * no formulário para o auditor ter a resposta pronta quando perguntarem
+ * "de onde saiu esse número?".
  */
 const DemonstrativoNota = ({ respostas, isMobile }) => {
     const d = demonstrativoNota(respostas);
@@ -549,19 +545,8 @@ const DemonstrativoNota = ({ respostas, isMobile }) => {
             <div style={{ borderTop: `2px solid ${SOL_ACCENT}55`, marginTop: '0.6rem', paddingTop: '0.5rem' }}>
                 {linhaFinal('Score 5S', d.geral5S != null ? `${d.geral5S}%` : '—', scoreCor(d.geral5S))}
                 {linhaFinal('Score SOL', d.geralSOL != null ? `${d.geralSOL}%` : '—', scoreCor(d.geralSOL))}
-                {linhaFinal('Índice Solar', d.solarBruto != null ? `${d.solarBruto}%` : '—', scoreCor(d.solarBruto), 'média do 5S com o SOL')}
-                {d.vetos.length > 0 && (
-                    <div style={{ marginTop: '0.4rem', borderRadius: 8, border: '1px solid #DC262655', background: '#DC26261a', padding: '0.5rem 0.65rem' }}>
-                        <div style={{ fontSize: '0.68rem', fontWeight: 900, color: '#F87171', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <FaShieldAlt size={11} /> Veto de segurança — teto de {d.teto}%
-                        </div>
-                        <div style={{ fontSize: '0.64rem', color: '#FCA5A5', marginTop: 3, fontWeight: 700 }}>
-                            {d.vetos.map(v => `${v.label} (nota ${v.nota})`).join(' · ')}
-                        </div>
-                    </div>
-                )}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border-color-dark)' }}>
-                    <span style={{ fontSize: '0.78rem', fontWeight: 900, color: 'var(--color-text-main)' }}>Nota final {d.vetos.length > 0 && <span style={{ fontSize: '0.62rem', fontWeight: 700, color: '#F87171' }}>(limitada pelo veto)</span>}</span>
+                    <span style={{ fontSize: '0.78rem', fontWeight: 900, color: 'var(--color-text-main)' }}>Nota final <span style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--color-text-subtle)' }}>(média do 5S com o SOL)</span></span>
                     <span style={{ fontSize: '1.15rem', fontWeight: 900, color: selo.cor, whiteSpace: 'nowrap' }}>{selo.emoji} {d.solar != null ? `${d.solar}%` : '—'}</span>
                 </div>
                 <div style={{ fontSize: '0.64rem', color: 'var(--color-text-muted)', textAlign: 'right' }}>{selo.label} · faixas: 🌑 &lt;{FAIXA_ATENCAO}% · 🌅 {FAIXA_ATENCAO}–{FAIXA_CONSOLIDA - 1}% · 🌤️ {FAIXA_CONSOLIDA}–{FAIXA_EXCELENCIA - 1}% · ☀️ ≥{FAIXA_EXCELENCIA}%</div>
@@ -659,9 +644,7 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
     const respondidos = countResp(SENSOS) + countResp(SOL_PILARES);
     const sc = scores5S(respostas);           // 5S (radar + geral)
     const scSol = scoresSOL(respostas);        // SOL (3 pilares + geral)
-    const solar = indiceSolar(sc.geral, scSol.geral, respostas); // índice combinado (com veto)
-    const vetos = vetosSeguranca(respostas);   // desvios de segurança que travam o índice
-    const solarBruto = indiceSolar(sc.geral, scSol.geral);
+    const solar = indiceSolar(sc.geral, scSol.geral); // índice combinado
 
     const setNota = (itemId, n) => setRespostas(p => ({ ...p, [itemId]: p[itemId] === n ? null : n }));
     const capture = async (itemId, e) => {
@@ -825,19 +808,6 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
                         <div style={{ fontSize: '0.95rem', fontWeight: 900, color: SOL_ACCENT, display: 'flex', alignItems: 'center', gap: '0.4rem' }}><FaSun /> Programa SOL · Segurança · Organização · Limpeza</div>
                         <div style={{ fontSize: '0.72rem', color: 'var(--color-text-main)', fontWeight: 700, marginTop: 2 }}>Segurança · Organização · Limpeza</div>
                         <div style={{ fontSize: '0.68rem', color: 'var(--color-text-muted)', marginTop: 4, lineHeight: 1.4 }}>{solSelo(solar).frase}</div>
-                        {vetos.length > 0 && (
-                            <div style={{ marginTop: '0.5rem', borderRadius: 8, border: '1px solid #DC262655', background: '#DC26261a', padding: '0.5rem 0.65rem' }}>
-                                <div style={{ fontSize: '0.68rem', fontWeight: 900, color: '#F87171', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                    <FaShieldAlt size={11} /> Índice travado em {TETO_VETO_SEGURANCA}% (calculado: {solarBruto}%)
-                                </div>
-                                <div style={{ fontSize: '0.64rem', color: 'var(--color-text-muted)', marginTop: 3, lineHeight: 1.45 }}>
-                                    Desvio de segurança não é compensado por organização ou limpeza. Corrija para liberar o índice:
-                                </div>
-                                <div style={{ fontSize: '0.64rem', color: '#FCA5A5', marginTop: 3, fontWeight: 700 }}>
-                                    {vetos.map(v => `${v.label} (nota ${v.nota})`).join(' · ')}
-                                </div>
-                            </div>
-                        )}
                         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
                             {SOL_PILARES.map(p => (
                                 <span key={p.id} style={{ fontSize: '0.62rem', fontWeight: 800, color: p.cor, background: `${p.cor}18`, border: `1px solid ${p.cor}55`, borderRadius: 6, padding: '0.15rem 0.5rem' }}>{p.num} {p.nome.split(' & ')[0]} {scSol[p.id] != null ? `${scSol[p.id]}%` : '—'}</span>
@@ -1098,7 +1068,10 @@ export default function Gestao5SView() {
     // ── Mapa das áreas: cruza cadastro (plantas/setores) com últimas auditorias ──
     const auditoriasFiltradas = auditorias.filter(dentroPeriodo);
     const concluidas = auditoriasFiltradas.filter(a => a.status === 'concluida');
-    const solarDe = (aud) => aud?.scores?.solar ?? aud?.score ?? null; // índice solar (fallback p/ auditorias antigas só 5S)
+    // Índice solar. `solar_bruto` vem das auditorias gravadas enquanto o veto de
+    // segurança existiu e traz o índice sem o teto; `score` é o fallback das
+    // auditorias antigas, que só tinham 5S.
+    const solarDe = (aud) => aud?.scores?.solar_bruto ?? aud?.scores?.solar ?? aud?.score ?? null;
     // Áreas até o nível de LINHA/MÁQUINA. Onde o setor tem linhas/máquinas
     // cadastradas, cada uma vira uma área; setores sem máquinas ficam como "setor inteiro".
     const areasCadastro = [];

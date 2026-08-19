@@ -1,4 +1,4 @@
-import { SENSOS, SOL_PILARES, vetosSeguranca, TETO_VETO_SEGURANCA } from '../data/cincoS';
+import { SENSOS, SOL_PILARES } from '../data/cincoS';
 
 /*
  * Assistente PRIME (Gemini AI) — Mesma integração dos módulos do PRIME.
@@ -22,7 +22,6 @@ export function montarPromptResumo5S(aud, sc, scSol, solar) {
     .map(it => `${it.label} (nota ${aud.respostas[it.id]}${aud.observacoes?.[it.id] ? ` — ${aud.observacoes[it.id]}` : ''})`));
 
   const planos = aud.planos || [];
-  const vetos = vetosSeguranca(aud.respostas || {});
 
   return `Você é o Assistente PRIME, especialista em 5S e segurança do trabalho de uma fábrica de eletrodomésticos (Grupo MK · Mondial). Escreva o RESUMO EXECUTIVO de uma auditoria integrada 5S + Programa SOL (Segurança, Organização, Limpeza), em português do Brasil, com tom OBJETIVO, TÉCNICO e IMPESSOAL. Escreva na 3ª pessoa, sem saudações, sem 1ª pessoa e sem exclamações. NÃO invente dados: use apenas os números abaixo.
 Área: ${aud.fabrica || ''} · ${aud.setor || ''}${aud.maquina ? ` · ${aud.maquina}` : ''} (${aud.planta || ''}).
@@ -31,7 +30,6 @@ Régua de pontuação: a escala 0–5 não é linear — nota 3 vale 45% do crit
 Sensos 5S: ${linhas5S}.
 Pilares SOL: ${linhasSOL}.
 Critérios críticos (nota ≤ 2): ${criticos.length ? criticos.join('; ') : 'nenhum'}.
-${vetos.length ? `ATENÇÃO — o Índice Solar está TRAVADO no teto de ${TETO_VETO_SEGURANCA}% por desvio de segurança (${vetos.map(v => `${v.label}, nota ${v.nota}`).join('; ')}). Trate isso como a prioridade número 1 do resumo: o resultado só é liberado após a correção.` : ''}
 Plano de ação: ${planos.length} ação(ões), ${planos.filter(p => p.status !== 'concluida').length} em aberto.
 Estruture em 2 a 3 parágrafos curtos: (1) leitura geral do resultado e nível de maturidade; (2) pontos fortes e principais focos de atenção (priorizando Segurança quando frágil); (3) recomendação objetiva de próximos passos. Sem marcadores, títulos, listas ou markdown — apenas texto corrido em parágrafos separados por linha em branco. Máximo de 180 palavras.`;
 }
