@@ -39,6 +39,10 @@ create table if not exists public.cinco_s_auditoria (
     criado_por     text
 );
 
+-- Bancos criados antes destas colunas: adiciona sem perder dados.
+alter table public.cinco_s_auditoria add column if not exists maquina       text;
+alter table public.cinco_s_auditoria add column if not exists analise_ia    text;
+
 create index if not exists idx_5s_status on public.cinco_s_auditoria (status);
 create index if not exists idx_5s_area   on public.cinco_s_auditoria (planta, fabrica, setor, maquina);
 

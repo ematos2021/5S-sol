@@ -3,15 +3,16 @@ import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 
 /*
- * Entrega do relatório da auditoria.
+ * Entrega do relatório da auditoria como ARQUIVO. Quem exibe o relatório na tela
+ * é o RelatorioViewer (iframe), que funciona em qualquer aparelho — aqui só se
+ * cuida de salvar/compartilhar, sempre a partir de um toque do usuário.
  *
- * No navegador: abre numa aba e baixa o arquivo — comportamento de sempre.
+ * No navegador: baixa o arquivo. Não se usa mais `window.open`: no tablet a aba
+ * nova é barrada como popup e a blob URL não abre, então o botão não fazia nada
+ * e nem erro dava. Como o relatório já está visível no viewer, a aba era supérflua.
  *
- * No tablet é outra história. Dentro da WebView do Android, `window.open` de
- * uma blob URL não abre nada, o link de download é ignorado e `window.print()`
- * é um no-op silencioso. O botão existiria e não faria nada — pior do que não
- * existir. Então o relatório é gravado como arquivo e entregue à folha de
- * compartilhamento do sistema: dali o auditor manda por WhatsApp ou e-mail na
+ * No tablet com o app nativo: grava em Documents e chama a folha de
+ * compartilhamento do sistema — dali o auditor manda por WhatsApp ou e-mail na
  * hora, ou abre no Chrome e usa Imprimir → Salvar como PDF.
  */
 
@@ -24,7 +25,6 @@ export async function entregarRelatorio(html, nomeArquivo) {
   if (!nativo) {
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
-    window.open(url, '_blank');
     const a = document.createElement('a');
     a.href = url;
     a.download = arquivo;

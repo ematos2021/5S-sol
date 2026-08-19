@@ -4,7 +4,11 @@ import { getUsuario } from '../services/usuario';
 import { compressImage } from '../services/imageCompressor';
 import { gerarResumoExecutivo } from '../services/ia';
 import { entregarRelatorio } from '../services/relatorio';
-import { SENSOS, ESCALA_5S, scores5S, SOL_PILARES, scoresSOL, scoresIntegrado, indiceSolar, solSelo } from '../data/cincoS';
+import {
+    SENSOS, ESCALA_5S, scores5S, SOL_PILARES, scoresSOL, scoresIntegrado, indiceSolar, solSelo,
+    vetosSeguranca, TETO_VETO_SEGURANCA, PONTOS_NOTA, demonstrativoNota,
+    FAIXA_EXCELENCIA, FAIXA_CONSOLIDA, FAIXA_ATENCAO,
+} from '../data/cincoS';
 import {
     FaPlus, FaTrash, FaSync, FaCheck, FaTimes, FaChevronLeft, FaBroom,
     FaChartPie, FaListUl, FaMapMarkedAlt, FaCamera, FaArrowLeft, FaCheckCircle,
@@ -27,7 +31,7 @@ const gerarResumoIA5S = (aud, sc, scSol, solar) => gerarResumoExecutivo(aud, sc,
 const hojeISO = () => new Date().toISOString().slice(0, 10);
 const fmtData = (d) => d ? new Date(String(d).slice(0, 10) + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
 const uid = () => `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-const scoreCor = (s) => s == null ? '#64748B' : s >= 85 ? '#16A34A' : s >= 70 ? '#D97706' : '#DC2626';
+const scoreCor = (s) => s == null ? '#64748B' : s >= FAIXA_EXCELENCIA ? '#16A34A' : s >= FAIXA_CONSOLIDA ? '#D97706' : '#DC2626';
 const notaCor = (n) => n == null ? 'var(--border-color-dark)' : n <= 1 ? '#DC2626' : n === 2 ? '#EA580C' : n === 3 ? '#D97706' : n === 4 ? '#84CC16' : '#16A34A';
 const norm = (s) => String(s ?? '').trim().toUpperCase();
 const areaKey = (a) => `${norm(a?.planta)}|${norm(a?.fabrica)}|${norm(a?.setor)}|${norm(a?.maquina)}`;
@@ -222,49 +226,24 @@ const Toast = ({ msg }) => (
 // ═══════════════════════════════════════════════════════════════════════════════
 //  RELATÓRIO ANALÍTICO 5S — 1 documento executivo (HTML → imprimir/PDF)
 // ═══════════════════════════════════════════════════════════════════════════════
-function gerarRelatorio5S(aud, emitente) {
+// Monta o relatório e devolve { html, nomeArquivo } — quem exibe é o RelatorioViewer.
+function montarRelatorio5S(aud, emitente) {
     const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const respostas = aud.respostas || {};
     const sc = aud.scores && aud.scores.geral != null ? aud.scores : scores5S(respostas);
     const geral = sc.geral;
     const scSol = scoresSOL(respostas);
-    const solar = aud.scores?.solar != null ? aud.scores.solar : indiceSolar(geral, scSol.geral);
+    const solar = aud.scores?.solar != null ? aud.scores.solar : indiceSolar(geral, scSol.geral, respostas);
     const selo = solSelo(solar);
+    const vetos = aud.scores?.veto_seguranca ?? vetosSeguranca(respostas);
+    const solarBruto = aud.scores?.solar_bruto ?? indiceSolar(geral, scSol.geral);
     const nowStr = new Date().toLocaleDateString('pt-BR');
-    const scCorHex = (s) => s == null ? '#94a3b8' : s >= 85 ? '#16a34a' : s >= 70 ? '#d97706' : '#dc2626';
+    const scCorHex = (s) => s == null ? '#94a3b8' : s >= FAIXA_EXCELENCIA ? '#16a34a' : s >= FAIXA_CONSOLIDA ? '#d97706' : '#dc2626';
     const notaHex = (n) => n == null ? '#94a3b8' : n <= 1 ? '#dc2626' : n === 2 ? '#ea580c' : n === 3 ? '#d97706' : n === 4 ? '#84cc16' : '#16a34a';
 
-    const avaliados = SENSOS.map(s => ({ s, v: sc[s.id] })).filter(x => x.v != null);
-    const melhor = avaliados.length ? avaliados.reduce((a, b) => (b.v > a.v ? b : a)) : null;
-    const pior = avaliados.length ? avaliados.reduce((a, b) => (b.v < a.v ? b : a)) : null;
     const criticos = SENSOS.flatMap(s => s.itens.filter(it => !it.emAvaliacao && !it.desabilitado && respostas[it.id] != null && respostas[it.id] <= 2).map(it => ({ senso: s, it, nota: respostas[it.id] })));
     const planos = aud.planos || [];
     const planosAbertos = planos.filter(p => p.status !== 'concluida');
-
-    // Leitura executiva (regras)
-    const insights = [];
-    if (geral == null) insights.push('📝 Auditoria ainda sem critérios avaliados.');
-    else if (geral >= 85) insights.push(`🏆 Área em nível de excelência (${geral}%). Foco em sustentar rituais e disseminar as práticas como referência.`);
-    else if (geral >= 70) insights.push(`📈 Área em consolidação (${geral}%). Atacar o senso mais frágil eleva o patamar geral.`);
-    else insights.push(`🚨 Área em atenção (${geral}%): priorizar o plano de ação e reauditar em até 30 dias.`);
-    if (pior && melhor && pior.s.id !== melhor.s.id) {
-        insights.push(`🔧 Senso mais frágil: ${pior.s.num} ${pior.s.nome.split('·')[1].trim()} (${pior.v}%).`);
-        insights.push(`⭐ Destaque: ${melhor.s.num} ${melhor.s.nome.split('·')[1].trim()} (${melhor.v}%).`);
-    }
-    if (criticos.length) insights.push(`⛔ ${criticos.length} critério(s) em condição crítica (nota ≤ 2) com desvio registrado.`);
-    // SOL
-    if (scSol.geral != null) {
-        insights.push(`${selo.emoji} Índice Solar ${solar}% — ${selo.label}. ${selo.frase}`);
-        const solAval = SOL_PILARES.map(p => ({ p, v: scSol[p.id] })).filter(x => x.v != null);
-        if (solAval.length) {
-            const solPior = solAval.reduce((a, b) => (b.v < a.v ? b : a));
-            if (solPior.v < 85) insights.push(`🔆 Raio do sol a fortalecer: ${solPior.p.num} · ${solPior.p.nome} (${solPior.v}%).`);
-        }
-        const segScore = scSol.sol_seg;
-        if (segScore != null && segScore < 70) insights.push(`🦺 Atenção à Segurança (${segScore}%): tratar antes de avançar — o sol só nasce onde é seguro trabalhar.`);
-    }
-    if (planosAbertos.length) insights.push(`📋 ${planosAbertos.length} ação(ões) do plano 5S+SOL em aberto${planos.length > planosAbertos.length ? ` (${planos.length - planosAbertos.length} concluída(s))` : ''}.`);
-    else if (planos.length) insights.push(`✅ Plano de ação 5S+SOL 100% concluído (${planos.length} ação(ões)).`);
 
     // Radar SVG (pentágono) inline
     const radarSvg = (() => {
@@ -319,11 +298,15 @@ function gerarRelatorio5S(aud, emitente) {
                     <span style="display:inline-flex;width:30px;height:30px;border-radius:50%;background:${notaHex(n)};color:#fff;font-size:13px;font-weight:900;align-items:center;justify-content:center">${n != null ? n : '—'}</span>
                     <div style="font-size:8.5px;color:#94a3b8;margin-top:2px">${n != null ? esc(ESCALA_5S[n].rotulo) : 'não avaliado'}</div></td></tr>`;
         }).join('');
-        return `<div class="avoid-break" style="margin-bottom:14px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">
-            <div style="background:${s.cor};padding:7px 12px;display:flex;justify-content:space-between;align-items:center">
-                <span style="font-weight:900;color:#fff;font-size:12px">${s.num} · ${esc(s.nome)}</span>
-                <span style="font-weight:900;color:#fff;font-size:13px">${scoresObj[s.id] != null ? scoresObj[s.id] + '%' : '—'}</span></div>
-            <table style="width:100%;border-collapse:collapse">${linhas}</table></div>`;
+        // A faixa colorida é um thead (não um div acima da tabela) para se repetir
+        // no topo de cada página quando o senso não cabe inteiro em uma folha.
+        return `<div class="bloco" style="margin-bottom:14px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">
+            <table style="width:100%;border-collapse:collapse">
+                <thead><tr><th colspan="2" style="background:${s.cor};padding:7px 12px;text-align:left">
+                    <span style="font-weight:900;color:#fff;font-size:12px">${s.num} · ${esc(s.nome)}</span>
+                    <span style="float:right;font-weight:900;color:#fff;font-size:13px">${scoresObj[s.id] != null ? scoresObj[s.id] + '%' : '—'}</span>
+                </th></tr></thead>
+                <tbody>${linhas}</tbody></table></div>`;
     }).join('');
     const detalheHtml = detalheDe(SENSOS, sc);
     const solDetalheHtml = detalheDe(SOL_PILARES, scSol);
@@ -378,16 +361,36 @@ function gerarRelatorio5S(aud, emitente) {
     const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(aud.titulo)} · Relatório</title>
 <style>
     * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    @page { size: A4; margin: 10mm; }
+    @page { size: A4; margin: 12mm 10mm; }
     @media print {
-        body { background: #fff !important; margin: 0 !important; }
+        html, body { background: #fff !important; margin: 0 !important; }
         .sheet { margin: 0 auto !important; box-shadow: none !important; border-radius: 0 !important; max-width: 100% !important; }
         .no-print { display: none !important; }
+
+        /* overflow:hidden arredonda o card na tela, mas na impressão vira uma
+           caixa que não quebra: o que passa do fim da página some. Some com ele. */
+        .sheet, .bloco { overflow: visible !important; }
+        .bloco { border-radius: 0 !important; }
+
+        /* Blocos curtos (KPIs, caixa do veto, resumo, radar, uma foto) ficam
+           inteiros. Blocos longos NÃO levam esta classe — se um bloco maior que a
+           página pede para não quebrar, o Chrome joga tudo para a página seguinte
+           e deixa uma folha em branco para trás. */
         .avoid-break { page-break-inside: avoid; break-inside: avoid; }
-        h2 { page-break-after: avoid; }
-        tr { page-break-inside: avoid; }
-        .page-break { page-break-before: always; }
-        img { max-height: 560px !important; }
+
+        /* Faixa colorida do senso/pilar vira thead: quando a tabela atravessa a
+           página, ela se repete no topo e o leitor não perde o contexto. */
+        thead { display: table-header-group; }
+        tfoot { display: table-footer-group; }
+        tr, img { page-break-inside: avoid; break-inside: avoid; }
+
+        /* Título nunca fica órfão no pé da página, nem sobra uma linha solta. */
+        h2 { page-break-after: avoid; break-after: avoid; }
+        p, td, div { orphans: 3; widows: 3; }
+
+        .page-break { page-break-before: always; break-before: page; }
+        .keep-next { page-break-after: avoid; break-after: avoid; }
+        img { max-height: 150mm !important; }
     }
 </style></head>
 <body style="margin:0;background:#f3f4f6;font-family:'Segoe UI',Roboto,Arial,sans-serif">
@@ -410,19 +413,22 @@ function gerarRelatorio5S(aud, emitente) {
             ${kpi(String(planosAbertos.length), 'Ações abertas', planosAbertos.length ? '#d97706' : '#16a34a')}
         </div>
 
+        ${vetos.length ? `<div class="avoid-break" style="background:#fef2f2;border:1px solid #fecaca;border-left:4px solid #dc2626;border-radius:8px;padding:10px 14px;margin:8px 0 6px">
+            <div style="font-size:12px;font-weight:900;color:#991b1b">🛑 Índice Solar bloqueado por desvio de segurança</div>
+            <div style="font-size:11px;color:#7f1d1d;margin-top:3px;line-height:1.5">O índice calculado foi <b>${solarBruto}%</b>, mas fica limitado a <b>${TETO_VETO_SEGURANCA}%</b> enquanto houver item do pilar Segurança com nota ≤ 2. Segurança não é compensada por organização ou limpeza.</div>
+            <div style="font-size:11px;color:#7f1d1d;margin-top:5px">${vetos.map(v => `• <b>${esc(v.label)}</b> — nota ${v.nota}`).join('<br/>')}</div>
+        </div>` : ''}
+
         ${(aud.analise_ia || '').trim() ? `${h2('🤖 Resumo Executivo')}
         <div class="avoid-break" style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:8px;padding:12px 16px;margin-bottom:6px">
             ${aud.analise_ia.trim().split(/\n{2,}/).map(p => p.trim()).filter(Boolean).map(p => `<p style="margin:0 0 8px;font-size:12.5px;line-height:1.65;color:#334155">${esc(p)}</p>`).join('')}
         </div>` : ''}
 
-        ${h2('🧭 Leitura executiva')}
-        ${insights.map(t => `<div style="font-size:12px;color:#334155;padding:5px 0;border-bottom:1px dashed #f1f5f9">${esc(t)}</div>`).join('')}
-
         ${h2('📡 Radar dos sensos')}
         <div class="avoid-break" style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
             <div style="flex-shrink:0">${radarSvg}</div>
             <div style="flex:1;min-width:280px">${barrasSensos}
-                <div style="font-size:9.5px;color:#94a3b8;margin-top:8px">Escala: ${ESCALA_5S.map(e => `<b>${e.nota}</b> ${e.rotulo}`).join(' · ')}. Score do senso = média dos critérios × 20.</div>
+                <div style="font-size:9.5px;color:#94a3b8;margin-top:8px">Escala: ${ESCALA_5S.map(e => `<b>${e.nota}</b> ${e.rotulo} (${PONTOS_NOTA[e.nota]}%)`).join(' · ')}. A escala não é linear — só a nota 5 vale 100% do critério. Score do senso = média dos critérios.</div>
             </div>
         </div>
 
@@ -442,7 +448,7 @@ function gerarRelatorio5S(aud, emitente) {
         ${detalheHtml}
 
         ${planos.length ? h2(`📋 Plano de Ação 5S + SOL (${planos.length - planosAbertos.length}/${planos.length} concluídas)`) + `
-        <table style="width:100%;border-collapse:collapse">
+        <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0">
             <thead><tr style="background:#f1f5f9"><th style="padding:6px 10px;font-size:10px;color:#64748b">Pilar</th><th style="padding:6px 10px;font-size:10px;text-align:left;color:#64748b">Ação</th><th style="padding:6px 10px;font-size:10px;text-align:left;color:#64748b">Responsável</th><th style="padding:6px 10px;font-size:10px;color:#64748b">Prazo</th><th style="padding:6px 10px;font-size:10px;color:#64748b">Status</th></tr></thead>
             <tbody>${planoRows}</tbody></table>` : ''}
 
@@ -453,13 +459,180 @@ function gerarRelatorio5S(aud, emitente) {
 </div></body></html>`;
 
     const nomeArquivo = `5S_${String(aud.fabrica || '').replace(/[^a-z0-9]/gi, '_')}_${String(aud.setor || '').replace(/[^a-z0-9]/gi, '_')}${aud.maquina ? '_' + String(aud.maquina).replace(/[^a-z0-9]/gi, '_') : ''}_${nowStr.replace(/\//g, '-')}.html`;
-    // No tablet isto vira arquivo + folha de compartilhamento; no navegador,
-    // o comportamento de sempre. Ver src/services/relatorio.js.
-    entregarRelatorio(html, nomeArquivo).catch(e => {
-        console.error('[relatorio]', e);
-        alert('Não foi possível gerar o relatório neste aparelho.');
-    });
+    return { html, nomeArquivo };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  DEMONSTRATIVO DA NOTA — a conta aberta, do critério ao Índice Solar
+// ═══════════════════════════════════════════════════════════════════════════════
+/*
+ * Com a curva progressiva (nota 3 = 45%, 4 = 72%) o número final deixou de ser
+ * uma conta que a área faz de cabeça. Esta tabela mostra cada etapa: quanto cada
+ * nota virou de ponto, a média de cada senso, como 5S e SOL se combinam e onde o
+ * veto de segurança entrou. Fica no formulário para o auditor ter a resposta
+ * pronta quando perguntarem "de onde saiu esse número?".
+ */
+const DemonstrativoNota = ({ respostas, isMobile }) => {
+    const d = demonstrativoNota(respostas);
+    const selo = solSelo(d.solar);
+
+    const th = { fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.3px', textTransform: 'uppercase', color: 'var(--color-text-subtle)', padding: '0.4rem 0.5rem', textAlign: 'right', whiteSpace: 'nowrap' };
+    const td = { fontSize: '0.72rem', color: 'var(--color-text-main)', padding: '0.35rem 0.5rem', textAlign: 'right', borderTop: '1px solid var(--border-color-dark)', whiteSpace: 'nowrap' };
+    const tdL = { ...td, textAlign: 'left', whiteSpace: 'normal' };
+
+    const bloco = (grupos, titulo, corTitulo, media, formula) => (
+        <div style={{ marginBottom: '0.9rem' }}>
+            <div style={{ fontSize: '0.68rem', fontWeight: 900, letterSpacing: '0.5px', textTransform: 'uppercase', color: corTitulo, marginBottom: '0.35rem' }}>{titulo}</div>
+            <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: isMobile ? 380 : 0 }}>
+                    <thead>
+                        <tr>
+                            <th style={{ ...th, textAlign: 'left', width: '100%' }}>Critério</th>
+                            <th style={th}>Nota</th>
+                            <th style={th}>Vale</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {grupos.map(g => (
+                            <React.Fragment key={g.id}>
+                                <tr>
+                                    <td colSpan={3} style={{ ...td, textAlign: 'left', background: `${g.cor}18`, borderLeft: `3px solid ${g.cor}`, fontWeight: 900, fontSize: '0.7rem', color: g.cor }}>
+                                        {g.num} · {g.nome}
+                                        <span style={{ float: 'right', color: scoreCor(g.score) }}>{g.score != null ? `${g.score}%` : '—'}</span>
+                                    </td>
+                                </tr>
+                                {g.itens.map(i => (
+                                    <tr key={i.id} style={{ opacity: i.fora ? 0.5 : 1 }}>
+                                        <td style={tdL}>{i.label}</td>
+                                        <td style={{ ...td, fontWeight: 800, color: i.fora ? 'var(--color-text-subtle)' : notaCor(i.nota) }}>{i.fora ? '—' : (i.nota ?? '—')}</td>
+                                        <td style={{ ...td, fontWeight: 800 }}>{i.fora ? 'não pontua' : (i.pontos != null ? `${i.pontos}%` : '—')}</td>
+                                    </tr>
+                                ))}
+                                <tr>
+                                    <td colSpan={3} style={{ ...td, textAlign: 'right', fontSize: '0.64rem', color: 'var(--color-text-muted)', borderTop: 'none', paddingTop: 0, paddingBottom: '0.5rem' }}>
+                                        {g.respondidos ? `${g.soma}% ÷ ${g.respondidos} critério(s) = ` : 'sem critério avaliado — '}
+                                        <b style={{ color: scoreCor(g.score) }}>{g.score != null ? `${g.score}%` : '—'}</b>
+                                    </td>
+                                </tr>
+                            </React.Fragment>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+            <div style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--color-text-main)', textAlign: 'right', marginTop: '0.3rem' }}>
+                {formula} = <span style={{ color: scoreCor(media), fontWeight: 900 }}>{media != null ? `${media}%` : '—'}</span>
+            </div>
+        </div>
+    );
+
+    const linhaFinal = (rotulo, valor, cor, obs) => (
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '0.6rem', padding: '0.3rem 0' }}>
+            <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>{rotulo}{obs && <span style={{ fontSize: '0.62rem', color: 'var(--color-text-subtle)' }}> · {obs}</span>}</span>
+            <span style={{ fontSize: '0.82rem', fontWeight: 900, color: cor, whiteSpace: 'nowrap' }}>{valor}</span>
+        </div>
+    );
+
+    return (
+        <div style={{ marginBottom: '1rem', borderRadius: 12, border: '1px solid var(--border-color-dark)', background: 'var(--bg-surface-glass)', padding: '0.9rem 1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.15rem' }}>
+                <FaListUl size={11} color="#60A5FA" />
+                <span style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--color-text-main)' }}>Demonstrativo da nota final</span>
+                <span style={{ fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.5px', color: '#60A5FA', background: '#3B82F61f', border: '1px solid #3B82F655', borderRadius: 5, padding: '0.1rem 0.4rem' }}>USO INTERNO · NÃO SAI NO RELATÓRIO</span>
+            </div>
+            <div style={{ fontSize: '0.66rem', color: 'var(--color-text-muted)', marginBottom: '0.8rem', lineHeight: 1.5 }}>
+                A escala não é linear: <b>0</b>→{PONTOS_NOTA[0]}% · <b>1</b>→{PONTOS_NOTA[1]}% · <b>2</b>→{PONTOS_NOTA[2]}% · <b>3</b>→{PONTOS_NOTA[3]}% · <b>4</b>→{PONTOS_NOTA[4]}% · <b>5</b>→{PONTOS_NOTA[5]}%. Cada senso/pilar é a média dos seus critérios; critérios ainda não avaliados ficam fora da conta.
+            </div>
+
+            {bloco(d.grupos5S, 'Programa 5S', ACCENT, d.geral5S, 'Score 5S = média dos 5 sensos')}
+            {bloco(d.gruposSOL, 'Programa SOL', SOL_ACCENT, d.geralSOL, 'Score SOL = média dos 3 pilares')}
+
+            <div style={{ borderTop: `2px solid ${SOL_ACCENT}55`, marginTop: '0.6rem', paddingTop: '0.5rem' }}>
+                {linhaFinal('Score 5S', d.geral5S != null ? `${d.geral5S}%` : '—', scoreCor(d.geral5S))}
+                {linhaFinal('Score SOL', d.geralSOL != null ? `${d.geralSOL}%` : '—', scoreCor(d.geralSOL))}
+                {linhaFinal('Índice Solar', d.solarBruto != null ? `${d.solarBruto}%` : '—', scoreCor(d.solarBruto), 'média do 5S com o SOL')}
+                {d.vetos.length > 0 && (
+                    <div style={{ marginTop: '0.4rem', borderRadius: 8, border: '1px solid #DC262655', background: '#DC26261a', padding: '0.5rem 0.65rem' }}>
+                        <div style={{ fontSize: '0.68rem', fontWeight: 900, color: '#F87171', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <FaShieldAlt size={11} /> Veto de segurança — teto de {d.teto}%
+                        </div>
+                        <div style={{ fontSize: '0.64rem', color: '#FCA5A5', marginTop: 3, fontWeight: 700 }}>
+                            {d.vetos.map(v => `${v.label} (nota ${v.nota})`).join(' · ')}
+                        </div>
+                    </div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border-color-dark)' }}>
+                    <span style={{ fontSize: '0.78rem', fontWeight: 900, color: 'var(--color-text-main)' }}>Nota final {d.vetos.length > 0 && <span style={{ fontSize: '0.62rem', fontWeight: 700, color: '#F87171' }}>(limitada pelo veto)</span>}</span>
+                    <span style={{ fontSize: '1.15rem', fontWeight: 900, color: selo.cor, whiteSpace: 'nowrap' }}>{selo.emoji} {d.solar != null ? `${d.solar}%` : '—'}</span>
+                </div>
+                <div style={{ fontSize: '0.64rem', color: 'var(--color-text-muted)', textAlign: 'right' }}>{selo.label} · faixas: 🌑 &lt;{FAIXA_ATENCAO}% · 🌅 {FAIXA_ATENCAO}–{FAIXA_CONSOLIDA - 1}% · 🌤️ {FAIXA_CONSOLIDA}–{FAIXA_EXCELENCIA - 1}% · ☀️ ≥{FAIXA_EXCELENCIA}%</div>
+            </div>
+        </div>
+    );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  VISUALIZADOR DO RELATÓRIO (overlay em tela cheia)
+// ═══════════════════════════════════════════════════════════════════════════════
+/*
+ * Antes o relatório era despachado direto: `window.open` de uma blob URL mais um
+ * link de download. No tablet isso não mostra nada — a WebView do Android ignora
+ * a blob URL, e o navegador do tablet bloqueia a aba nova por ser popup. Sem erro
+ * na tela, o auditor apertava o botão e não acontecia nada.
+ *
+ * Agora o relatório é sempre renderizado aqui dentro, num iframe, onde funciona em
+ * qualquer aparelho. Baixar/compartilhar e imprimir viram ações explícitas, e se
+ * alguma delas falhar o motivo aparece na barra em vez de sumir no console.
+ */
+const RelatorioViewer = ({ html, nomeArquivo, onClose }) => {
+    const isMobile = useIsMobile();
+    const iframeRef = useRef(null);
+    const [entregando, setEntregando] = useState(false);
+    const [aviso, setAviso] = useState('');
+
+    const imprimir = () => {
+        const win = iframeRef.current?.contentWindow;
+        if (!win) return;
+        try { win.focus(); win.print(); }
+        catch (e) { console.error('[relatorio:print]', e); setAviso('Este aparelho não imprime daqui. Use "Salvar / Enviar" e imprima pelo Chrome.'); }
+    };
+
+    const salvar = async () => {
+        setEntregando(true); setAviso('');
+        try {
+            const { modo } = await entregarRelatorio(html, nomeArquivo);
+            if (modo === 'navegador') setAviso('Arquivo baixado. Procure em Downloads.');
+        } catch (e) {
+            console.error('[relatorio:salvar]', e);
+            setAviso('Não foi possível salvar o arquivo neste aparelho. O relatório continua visível aqui.');
+        } finally { setEntregando(false); }
+    };
+
+    const btn = { display: 'flex', alignItems: 'center', gap: '0.4rem', border: '1px solid var(--border-color-dark)', background: 'rgba(255,255,255,0.06)', color: 'var(--color-text-main)', borderRadius: 9, padding: '0.5rem 0.9rem', fontSize: '0.74rem', fontWeight: 800, cursor: 'pointer' };
+
+    return (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 1200, background: '#0b0f14', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', padding: isMobile ? '0.6rem 0.7rem' : '0.7rem 1.1rem', borderBottom: '1px solid var(--border-color-dark)' }}>
+                <button onClick={onClose} style={{ ...btn, background: 'none', border: 'none' }}><FaArrowLeft size={14} /> Voltar</button>
+                <div style={{ flex: 1, minWidth: 0, fontSize: '0.74rem', fontWeight: 800, color: 'var(--color-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Relatório 5S + SOL</div>
+                <button onClick={imprimir} style={btn}><FaFilePdf size={12} /> Imprimir / PDF</button>
+                <button onClick={salvar} disabled={entregando} style={{ ...btn, background: `${ACCENT}22`, borderColor: `${ACCENT}66`, color: ACCENT, opacity: entregando ? 0.6 : 1 }}>
+                    {entregando ? <FaSpinner size={12} className="spin" /> : <FaSave size={12} />} Salvar / Enviar
+                </button>
+            </div>
+            {aviso && (
+                <div style={{ flexShrink: 0, fontSize: '0.7rem', color: '#FCD34D', background: '#F59E0B1a', borderBottom: '1px solid #F59E0B44', padding: '0.5rem 1.1rem', lineHeight: 1.45 }}>{aviso}</div>
+            )}
+            <iframe ref={iframeRef} srcDoc={html} title="Relatório 5S + SOL" style={{ flex: 1, width: '100%', border: 'none', background: '#e2e8f0' }} />
+        </div>
+    );
+};
+
+// Guarda o relatório aberto e devolve [overlay, abrir]. Cada tela que gera relatório usa o seu.
+const useRelatorioViewer = () => {
+    const [rel, setRel] = useState(null);
+    const overlay = rel ? <RelatorioViewer html={rel.html} nomeArquivo={rel.nomeArquivo} onClose={() => setRel(null)} /> : null;
+    return [overlay, setRel];
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  WORKSPACE DA AUDITORIA (overlay em tela cheia)
@@ -476,6 +649,7 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
     const [iaDraft, setIaDraft] = useState('');
     const [iaErr, setIaErr] = useState('');
     const [infoItem, setInfoItem] = useState(null);
+    const [relViewer, abrirRelatorio] = useRelatorioViewer();
     const fileRefs = useRef({});
 
     const countResp = (grupos) => grupos.reduce((s, x) => s + x.itens.filter(it => !it.emAvaliacao && !it.desabilitado && respostas[it.id] != null && respostas[it.id] !== '').length, 0);
@@ -485,7 +659,9 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
     const respondidos = countResp(SENSOS) + countResp(SOL_PILARES);
     const sc = scores5S(respostas);           // 5S (radar + geral)
     const scSol = scoresSOL(respostas);        // SOL (3 pilares + geral)
-    const solar = indiceSolar(sc.geral, scSol.geral); // índice combinado
+    const solar = indiceSolar(sc.geral, scSol.geral, respostas); // índice combinado (com veto)
+    const vetos = vetosSeguranca(respostas);   // desvios de segurança que travam o índice
+    const solarBruto = indiceSolar(sc.geral, scSol.geral);
 
     const setNota = (itemId, n) => setRespostas(p => ({ ...p, [itemId]: p[itemId] === n ? null : n }));
     const capture = async (itemId, e) => {
@@ -622,11 +798,16 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
 
             {/* Corpo */}
             <div style={{ flex: 1, overflowY: 'auto', padding: '1rem 1.2rem 6.5rem' }}>
-                {/* Legenda da escala */}
-                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '1.1rem' }}>
+                {/* Legenda da escala — mostra quanto cada nota vale de fato (curva progressiva) */}
+                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.35rem' }}>
                     {ESCALA_5S.map(e => (
-                        <span key={e.nota} title={e.desc} style={{ fontSize: '0.62rem', fontWeight: 700, color: notaCor(e.nota), border: `1px solid ${notaCor(e.nota)}55`, background: `${notaCor(e.nota)}12`, borderRadius: 6, padding: '0.18rem 0.5rem', cursor: 'help' }}>{e.nota} · {e.rotulo}</span>
+                        <span key={e.nota} title={`${e.desc} · vale ${PONTOS_NOTA[e.nota]}% do critério`} style={{ fontSize: '0.62rem', fontWeight: 700, color: notaCor(e.nota), border: `1px solid ${notaCor(e.nota)}55`, background: `${notaCor(e.nota)}12`, borderRadius: 6, padding: '0.18rem 0.5rem', cursor: 'help' }}>
+                            {e.nota} · {e.rotulo} <span style={{ opacity: 0.75, fontWeight: 800 }}>{PONTOS_NOTA[e.nota]}%</span>
+                        </span>
                     ))}
+                </div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--color-text-subtle)', marginBottom: '1.1rem', lineHeight: 1.45 }}>
+                    A escala não é linear: o valor cresce no topo, então só a nota 5 entrega 100% do critério.
                 </div>
 
                 {/* ── Bloco 5S ── */}
@@ -644,6 +825,19 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
                         <div style={{ fontSize: '0.95rem', fontWeight: 900, color: SOL_ACCENT, display: 'flex', alignItems: 'center', gap: '0.4rem' }}><FaSun /> Programa SOL · Segurança · Organização · Limpeza</div>
                         <div style={{ fontSize: '0.72rem', color: 'var(--color-text-main)', fontWeight: 700, marginTop: 2 }}>Segurança · Organização · Limpeza</div>
                         <div style={{ fontSize: '0.68rem', color: 'var(--color-text-muted)', marginTop: 4, lineHeight: 1.4 }}>{solSelo(solar).frase}</div>
+                        {vetos.length > 0 && (
+                            <div style={{ marginTop: '0.5rem', borderRadius: 8, border: '1px solid #DC262655', background: '#DC26261a', padding: '0.5rem 0.65rem' }}>
+                                <div style={{ fontSize: '0.68rem', fontWeight: 900, color: '#F87171', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                    <FaShieldAlt size={11} /> Índice travado em {TETO_VETO_SEGURANCA}% (calculado: {solarBruto}%)
+                                </div>
+                                <div style={{ fontSize: '0.64rem', color: 'var(--color-text-muted)', marginTop: 3, lineHeight: 1.45 }}>
+                                    Desvio de segurança não é compensado por organização ou limpeza. Corrija para liberar o índice:
+                                </div>
+                                <div style={{ fontSize: '0.64rem', color: '#FCA5A5', marginTop: 3, fontWeight: 700 }}>
+                                    {vetos.map(v => `${v.label} (nota ${v.nota})`).join(' · ')}
+                                </div>
+                            </div>
+                        )}
                         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
                             {SOL_PILARES.map(p => (
                                 <span key={p.id} style={{ fontSize: '0.62rem', fontWeight: 800, color: p.cor, background: `${p.cor}18`, border: `1px solid ${p.cor}55`, borderRadius: 6, padding: '0.15rem 0.5rem' }}>{p.num} {p.nome.split(' & ')[0]} {scSol[p.id] != null ? `${scSol[p.id]}%` : '—'}</span>
@@ -717,6 +911,9 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
                         );
                     })}
                 </div>
+
+                {/* Demonstrativo da nota — abre a conta inteira até o Índice Solar */}
+                <DemonstrativoNota respostas={respostas} isMobile={isMobile} />
             </div>
 
             {/* Rodapé */}
@@ -725,7 +922,7 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
                     {respondidos === totalItens ? <span style={{ color: '#16A34A', fontWeight: 700 }}>✓ Tudo avaliado · 5S {sc.geral}% · SOL {scSol.geral}%</span> : <span>Faltam {totalItens - respondidos} critérios</span>}
                     <SolSeloPill value={solar} />
                 </div>
-                <button onClick={() => gerarRelatorio5S({ ...aud, respostas, observacoes, fotos, planos, score: sc.geral, scores: scoresIntegrado(respostas) }, aud.auditor || 'Sistema')}
+                <button onClick={() => abrirRelatorio(montarRelatorio5S({ ...aud, respostas, observacoes, fotos, planos, score: sc.geral, scores: scoresIntegrado(respostas) }, aud.auditor || 'Sistema'))}
                     style={{ ...btnSec, flex: isMobile ? 1 : 'none', justifyContent: 'center', padding: '0.62rem 1rem' }} title="Gerar relatório analítico (imprimir/PDF)">
                     <FaFilePdf size={11} color="#DC2626" /> Relatório
                 </button>
@@ -758,6 +955,8 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
                     </div>
                 </ModalShell>
             )}
+
+            {relViewer}
 
             <style>{`@keyframes spin{to{transform:rotate(360deg)}}.spin{animation:spin 1s linear infinite}`}</style>
         </div>
@@ -792,6 +991,7 @@ export default function Gestao5SView() {
     const [statusInd, setStatusInd] = useState('todas'); // todas | auditadas | excelencia | atencao | sem_auditoria
     const [buscaInd, setBuscaInd] = useState('');
     const [ordemInd, setOrdemInd] = useState('pior'); // pior | melhor | recente | nome
+    const [relViewer, abrirRelatorio] = useRelatorioViewer();
     const [buscaSetorRank, setBuscaSetorRank] = useState('');
 
     const showMsg = (text, type = 'success') => { setMsg({ text, type }); setTimeout(() => setMsg(null), 2800); };
@@ -829,10 +1029,11 @@ export default function Gestao5SView() {
             titulo: aud.titulo, planta: aud.planta, fabrica: aud.fabrica, setor: aud.setor, maquina: maquinaAlvo ?? null,
             auditor: aud.auditor, acompanhante: aud.acompanhante, data_auditoria: aud.data_auditoria,
             status: aud.status, respostas: aud.respostas, observacoes: aud.observacoes, fotos: aud.fotos,
-            planos: aud.planos, score: aud.score, scores: aud.scores, analise_ia: aud.analise_ia ?? null, criado_por: aud.criado_por || userName,
+            planos: aud.planos, score: aud.score, scores: aud.scores, analise_ia: aud.analise_ia ?? null,
+            criado_por: aud.criado_por || userName,
         };
-        // Grava; se alguma coluna nova (analise_ia / maquina) ainda não existe no banco,
-        // remove a coluna reclamada e regrava (rode os cinco_s_update*.sql p/ persistir tudo).
+        // Grava; se alguma coluna nova (analise_ia / maquina) ainda não existe
+        // no banco, remove a coluna reclamada e regrava (rode o database/schema.sql p/ persistir tudo).
         const write = (pl) => aud.id
             ? supabase.from('cinco_s_auditoria').update(pl).eq('id', aud.id).select().single()
             : supabase.from('cinco_s_auditoria').insert([pl]).select().single();
@@ -845,7 +1046,7 @@ export default function Gestao5SView() {
             if (nome && nome in payload) { const { [nome]: _drop, ...rest } = payload; payload = rest; faltou = true; continue; }
             break;
         }
-        if (!error && faltou) showMsg('Salvo (rode os cinco_s_update*.sql p/ guardar resumo/máquina)', 'success');
+        if (!error && faltou) showMsg('Salvo — mas falta coluna no banco (rode database/schema.sql p/ guardar resumo/máquina)', 'success');
         if (error) { setSaving(false); showMsg('Erro: ' + error.message, 'error'); return; }
         const saved = tratarAuditoria({ ...aud, ...data, maquina: maquinaAlvo });
         setAuditorias(prev => aud.id ? prev.map(a => a.id === saved.id ? saved : a) : [saved, ...prev]);
@@ -1010,8 +1211,8 @@ export default function Gestao5SView() {
         });
         return out;
     })();
-    // Mural do Sol: áreas que "viram o sol nascer" (índice solar ≥ 85), ranqueadas
-    const muralSol = auditadas.filter(m => (solarDe(m.ult) ?? 0) >= 85).sort((a, b) => (solarDe(b.ult) - solarDe(a.ult)));
+    // Mural do Sol: áreas que "viram o sol nascer" (índice solar ≥ FAIXA_EXCELENCIA), ranqueadas
+    const muralSol = auditadas.filter(m => (solarDe(m.ult) ?? 0) >= FAIXA_EXCELENCIA).sort((a, b) => (solarDe(b.ult) - solarDe(a.ult)));
 
     // ── Diagnóstico estruturado por Fábrica (Fábrica 1, 2, 3...) em Indicadores ──
     const fabricasLista = (() => {
@@ -1055,8 +1256,8 @@ export default function Gestao5SView() {
 
             const score = m.ult ? solarDe(m.ult) : null;
             if (statusInd === 'auditadas' && !m.ult) return false;
-            if (statusInd === 'excelencia' && (score == null || score < 85)) return false;
-            if (statusInd === 'atencao' && (score == null || score >= 70)) return false;
+            if (statusInd === 'excelencia' && (score == null || score < FAIXA_EXCELENCIA)) return false;
+            if (statusInd === 'atencao' && (score == null || score >= FAIXA_CONSOLIDA)) return false;
             if (statusInd === 'sem_auditoria' && m.ult) return false;
 
             return true;
@@ -1083,7 +1284,7 @@ export default function Gestao5SView() {
     const gerarRelatorioGeral = () => {
         const nowStr = new Date().toLocaleDateString('pt-BR');
         const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const scCorHex = (s) => s == null ? '#94a3b8' : s >= 85 ? '#16a34a' : s >= 70 ? '#d97706' : '#dc2626';
+        const scCorHex = (s) => s == null ? '#94a3b8' : s >= FAIXA_EXCELENCIA ? '#16a34a' : s >= FAIXA_CONSOLIDA ? '#d97706' : '#dc2626';
 
         const rankingHtml = [...mapaSetores].filter(s => s.mediaSolar != null).sort((a, b) => b.mediaSolar - a.mediaSolar).map((s, i) => `
             <tr>
@@ -1132,7 +1333,7 @@ export default function Gestao5SView() {
                     </div>
                 </div>
 
-                <h2 style="font-size:14px;color:#0f172a;border-bottom:2px solid #22c55e;padding-bottom:5px;margin-bottom:10px">🏆 Mural do Sol (Áreas ≥ 85%)</h2>
+                <h2 style="font-size:14px;color:#0f172a;border-bottom:2px solid #22c55e;padding-bottom:5px;margin-bottom:10px">🏆 Mural do Sol (Áreas ≥ ${FAIXA_EXCELENCIA}%)</h2>
                 <div style="margin-bottom:20px">${muralHtml || '<span style="font-size:12px;color:#64748b">Nenhuma área no Mural do Sol ainda.</span>'}</div>
 
                 <h2 style="font-size:14px;color:#0f172a;border-bottom:2px solid #22c55e;padding-bottom:5px;margin-bottom:10px">📈 Ranking dos Setores</h2>
@@ -1148,10 +1349,7 @@ export default function Gestao5SView() {
             </div>
         </div></body></html>`;
 
-        entregarRelatorio(html, `Relatorio_Geral_5S_${nowStr.replace(/\//g, '-')}.html`).catch(e => {
-            console.error('[relatorio geral]', e);
-            alert('Não foi possível gerar o relatório neste aparelho.');
-        });
+        abrirRelatorio({ html, nomeArquivo: `Relatorio_Geral_5S_${nowStr.replace(/\//g, '-')}.html` });
     };
 
     if (sel) return <Auditoria5S aud={sel} onClose={() => setSel(null)} onSave={saveAuditoria} saving={saving} />;
@@ -1159,6 +1357,7 @@ export default function Gestao5SView() {
     return (
         <div style={{ padding: isMobile ? '0.8rem' : '1rem 1.25rem', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: '0.7rem' }}>
             {msg && <Toast msg={msg} />}
+            {relViewer}
             {/* Ação rápida */}
             <div style={{ flexShrink: 0, display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
                 {tab === 'indicadores' && (
@@ -1339,7 +1538,7 @@ export default function Gestao5SView() {
                                             <div key={a.id} className="glass-panel s5-card" onClick={() => setSel(a)} style={{ borderRadius: 11, border: '1px solid var(--border-color-dark)', padding: '0.85rem', cursor: 'pointer', position: 'relative', transition: 'transform 0.15s' }}
                                                 onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-3px)'} onMouseLeave={e => e.currentTarget.style.transform = 'none'}>
                                                 <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4 }}>
-                                                    <button className="s5-del" onClick={e => { e.stopPropagation(); gerarRelatorio5S(a, a.auditor || 'Sistema'); }} title="Relatório analítico"
+                                                    <button className="s5-del" onClick={e => { e.stopPropagation(); abrirRelatorio(montarRelatorio5S(a, a.auditor || 'Sistema')); }} title="Relatório analítico"
                                                         style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(59,130,246,0.18)', border: 'none', color: '#3B82F6', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.15s' }}><FaFilePdf size={10} /></button>
                                                     <button className="s5-del" onClick={e => { e.stopPropagation(); setConfirmDel(a); }} style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(220,38,38,0.15)', border: 'none', color: '#DC2626', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.15s' }}><FaTimes size={10} /></button>
                                                 </div>
@@ -1741,11 +1940,11 @@ export default function Gestao5SView() {
 
                             <div className="glass-panel" style={{ borderRadius: 14, border: '1px solid var(--border-color-dark)', padding: '1.2rem' }}>
                                 <div style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--color-text-main)', marginBottom: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                    <FaTrophy size={13} color="#EAB308" /> Mural do Sol — Excelência (≥ 85%) ☀️
+                                    <FaTrophy size={13} color="#EAB308" /> Mural do Sol — Excelência (≥ {FAIXA_EXCELENCIA}%) ☀️
                                 </div>
                                 {muralSol.length === 0 ? (
                                     <div style={{ fontSize: '0.74rem', color: 'var(--color-text-muted)', lineHeight: 1.5, padding: '1rem 0' }}>
-                                        Nenhuma área atingiu <b>Sol Pleno</b> (Índice Solar ≥ 85%) ainda. A primeira a chegar lá entra no mural como referência!
+                                        Nenhuma área atingiu <b>Sol Pleno</b> (Índice Solar ≥ {FAIXA_EXCELENCIA}%) ainda. A primeira a chegar lá entra no mural como referência!
                                     </div>
                                 ) : (
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', maxHeight: 360, overflowY: 'auto' }}>

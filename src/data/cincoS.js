@@ -13,13 +13,25 @@ export const ESCALA_5S = [
     { nota: 5, rotulo: 'Excelência', desc: 'Referência: melhoria contínua e autonomia da equipe.' },
 ];
 
+// ── Curva de pontuação (progressiva) ─────────────────────────────────────────
+// A escala 0–5 NÃO é linear: o valor de cada nota cresce mais rápido no topo,
+// para que "o padrão existe e quase sempre é seguido" (3) não seja confundido
+// com bom desempenho. Só a nota 5 entrega os 100% do critério.
+export const PONTOS_NOTA = { 0: 0, 1: 5, 2: 20, 3: 45, 4: 72, 5: 100 };
+
+// Converte a nota do critério em % (0–100). Nota ausente/inválida → null.
+export const pontosDaNota = (n) => {
+    if (n == null || n === '') return null;
+    const p = PONTOS_NOTA[Number(n)];
+    return p == null ? null : p;
+};
+
 export const SENSOS = [
     {
         id: 'seiri', num: '1S', nome: 'Seiri · Utilização', cor: '#3B82F6',
         conceito: 'Separar o necessário do desnecessário e descartar o que não agrega.',
         itens: [
             { id: 's1_uteis', label: 'Somente itens necessários na área', desc: 'Materiais, ferramentas e equipamentos presentes são usados na rotina da máquina; nada obsoleto ou em excesso no posto.' },
-            { id: 's1_descarte', label: 'Tratamento de itens sem uso / descarte', desc: 'Lixeira próxima à atividade que está sendo executada, não transbordando.' },
             { id: 's1_estoque', label: 'Quantidades adequadas no posto', desc: 'Estoques no posto da máquina limitados ao necessário do período.' },
             { id: 's1_info', label: 'Documentos e informações vigentes', desc: 'ITs, procedimentos e documentos de referência da máquina estão atualizados e acessíveis no posto de trabalho.' },
         ],
@@ -38,7 +50,6 @@ export const SENSOS = [
         id: 'seiso', num: '3S', nome: 'Seiso · Limpeza', cor: '#D97706',
         conceito: 'Limpar é inspecionar: eliminar sujeira e atacar suas fontes.',
         itens: [
-            { id: 's3_area', label: 'Área e equipamentos limpos', desc: 'Máquina, bancadas e piso no entorno imediato sem sujeira, óleo, rebarbas ou resíduos acumulados.' },
             { id: 's3_rotina', label: 'Rotina de limpeza da máquina cumprida', desc: 'Checklist de limpeza da máquina é visível no posto e preenchido conforme frequência definida através do FR.284 Escala de Limpeza.' },
             { id: 's3_fontes', label: 'Fontes de sujeira tratadas', desc: 'Vazamentos e geradores de sujeira na máquina identificados e com ação corretiva em andamento (não apenas limpeza repetida). Obs. Perguntar ao operador se tem algo que gere sujeira com frequência, caso sim, pedir o numeração da Nota ao líder/supervisor.' },
             { id: 's3_recursos', label: 'Recursos de limpeza disponíveis e organizados', desc: 'Panos, vassouras, rodos, pás e demais itens necessários identificados, em bom estado e em local padronizado e de acesso aos colaboradores do posto.' },
@@ -109,12 +120,14 @@ export const SOL_PILARES = [
 export const getItens5SFlat = () => SENSOS.flatMap(s => s.itens.map(it => ({ ...it, senso: s.id, sensoNome: s.nome, sensoNum: s.num, cor: s.cor })));
 
 // Score de um senso (0-100) a partir do mapa de respostas { item_id: 0..5 }
-// Itens em avaliação / desabilitados não entram na contagem de pontos nem no total de critérios
+// Itens em avaliação / desabilitados não entram na contagem de pontos nem no total de critérios.
+// Critérios ainda não respondidos ficam fora do cálculo (não valem zero): num rascunho o
+// score reflete o que já foi avaliado. Para concluir a auditoria o formulário exige todos.
 export const scoreSenso = (senso, respostas) => {
     const itensAtivos = (senso.itens || []).filter(it => !it.emAvaliacao && !it.desabilitado);
-    const notas = itensAtivos.map(it => respostas?.[it.id]).filter(n => n != null && n !== '');
-    if (!notas.length || !itensAtivos.length) return null;
-    return Math.round((notas.reduce((s, n) => s + Number(n), 0) / (itensAtivos.length * 5)) * 100);
+    const pontos = itensAtivos.map(it => pontosDaNota(respostas?.[it.id])).filter(p => p != null);
+    if (!pontos.length) return null;
+    return Math.round(pontos.reduce((s, p) => s + p, 0) / pontos.length);
 };
 
 // Scores completos: { seiri: 80, ..., geral: 76 } (geral = média dos sensos avaliados)
@@ -147,29 +160,105 @@ export const scoresSOL = (respostas) => {
     return out;
 };
 
+// ── Veto de segurança ────────────────────────────────────────────────────────
+// Segurança não se compensa com organização e limpeza: um desvio grave num item
+// do pilar Segurança trava o Índice Solar num teto, por melhor que seja o resto.
+export const NOTA_VETO_SEGURANCA = 2;   // nota ≤ 2 dispara o veto
+export const TETO_VETO_SEGURANCA = 69;  // teto do Índice Solar (máx. 🌅 Amanhecer)
+
+// Itens de Segurança em nota crítica — [] quando não há veto ativo
+export const vetosSeguranca = (respostas) => {
+    const pilar = SOL_PILARES.find(p => p.id === 'sol_seg');
+    if (!pilar) return [];
+    return pilar.itens
+        .filter(it => !it.emAvaliacao && !it.desabilitado)
+        .map(it => ({ id: it.id, label: it.label, nota: respostas?.[it.id] }))
+        .filter(x => x.nota != null && x.nota !== '' && Number(x.nota) <= NOTA_VETO_SEGURANCA)
+        .map(x => ({ ...x, nota: Number(x.nota) }));
+};
+
 // Índice Solar: combina 5S e SOL (média dos que existirem). É o que faz o sol nascer.
-export const indiceSolar = (geral5S, geralSOL) => {
+// Passando `respostas`, aplica o veto de segurança sobre o índice.
+export const indiceSolar = (geral5S, geralSOL, respostas) => {
     const vals = [geral5S, geralSOL].filter(v => v != null);
-    return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+    if (!vals.length) return null;
+    const bruto = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+    if (respostas && vetosSeguranca(respostas).length) return Math.min(bruto, TETO_VETO_SEGURANCA);
+    return bruto;
 };
 
 // Consolida tudo num único objeto de scores (gravado no jsonb `scores`)
 export const scoresIntegrado = (respostas) => {
     const s5 = scores5S(respostas);
     const sol = scoresSOL(respostas);
+    const vetos = vetosSeguranca(respostas);
+    const bruto = indiceSolar(s5.geral, sol.geral);
     return {
         ...s5,                                    // seiri..shitsuke + geral (5S)
         sol_seg: sol.sol_seg, sol_org: sol.sol_org, sol_lim: sol.sol_lim,
         sol_geral: sol.geral,
-        solar: indiceSolar(s5.geral, sol.geral),  // índice combinado
+        solar: indiceSolar(s5.geral, sol.geral, respostas), // índice combinado (com veto)
+        solar_bruto: bruto,                       // antes do veto — rastreabilidade
+        veto_seguranca: vetos,                    // [] quando não houve veto
     };
 };
+
+// ── Faixas de desempenho ─────────────────────────────────────────────────────
+// Referência única de corte: usada pelo selo solar, pelas cores dos scores e
+// pelos filtros de status. Mexer aqui muda a régua em todo o sistema.
+export const FAIXA_EXCELENCIA = 90;  // ☀️ verde
+export const FAIXA_CONSOLIDA  = 75;  // 🌤️ âmbar
+export const FAIXA_ATENCAO    = 55;  // 🌅 abaixo disso, vermelho/crítico
 
 // Selo do sol por estágio do Índice Solar — o coração lúdico do programa
 export const solSelo = (solar) => {
     if (solar == null) return { key: 'none', emoji: '🌑', label: 'Sem leitura', frase: 'Aguardando a primeira auditoria.', cor: '#64748B' };
-    if (solar < 50) return { key: 'madrugada', emoji: '🌑', label: 'Antes do amanhecer', frase: 'Ainda é madrugada aqui — há muito a preparar para o sol nascer.', cor: '#6366F1' };
-    if (solar < 70) return { key: 'amanhecer', emoji: '🌅', label: 'Amanhecer', frase: 'O sol começa a nascer. Bom caminho — mantenha o ritmo!', cor: '#F97316' };
-    if (solar < 85) return { key: 'raiando', emoji: '🌤️', label: 'Sol raiando', frase: 'Quase lá! Os raios já aquecem a área.', cor: '#F59E0B' };
+    if (solar < FAIXA_ATENCAO) return { key: 'madrugada', emoji: '🌑', label: 'Antes do amanhecer', frase: 'Ainda é madrugada aqui — há muito a preparar para o sol nascer.', cor: '#6366F1' };
+    if (solar < FAIXA_CONSOLIDA) return { key: 'amanhecer', emoji: '🌅', label: 'Amanhecer', frase: 'O sol começa a nascer. Bom caminho — mantenha o ritmo!', cor: '#F97316' };
+    if (solar < FAIXA_EXCELENCIA) return { key: 'raiando', emoji: '🌤️', label: 'Sol raiando', frase: 'Quase lá! Os raios já aquecem a área.', cor: '#F59E0B' };
     return { key: 'pleno', emoji: '☀️', label: 'Sol pleno', frase: 'O sol nasceu na Mondial! Excelência — hora de brilhar e inspirar.', cor: '#EAB308' };
+};
+
+// ── Demonstrativo da nota ────────────────────────────────────────────────────
+// Abre a conta inteira, item a item, até o Índice Solar: quanto cada nota virou
+// de ponto, a média de cada senso/pilar e como os dois programas se combinam.
+// É o que o auditor mostra quando a área pergunta "de onde saiu esse número?".
+export const demonstrativoNota = (respostas) => {
+    const montarGrupo = (g) => {
+        const itens = (g.itens || []).map(it => {
+            const fora = Boolean(it.emAvaliacao || it.desabilitado);
+            const nota = respostas?.[it.id];
+            return {
+                id: it.id, label: it.label, fora,
+                nota: nota == null || nota === '' ? null : Number(nota),
+                pontos: fora ? null : pontosDaNota(nota),
+            };
+        });
+        const contam = itens.filter(i => !i.fora && i.pontos != null);
+        const soma = contam.reduce((s, i) => s + i.pontos, 0);
+        return {
+            id: g.id, num: g.num, nome: g.nome, cor: g.cor, itens,
+            respondidos: contam.length,
+            ativos: itens.filter(i => !i.fora).length,
+            soma,
+            score: contam.length ? Math.round(soma / contam.length) : null,
+        };
+    };
+    const media = (grupos) => {
+        const v = grupos.map(g => g.score).filter(x => x != null);
+        return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : null;
+    };
+
+    const grupos5S = SENSOS.map(montarGrupo);
+    const gruposSOL = SOL_PILARES.map(montarGrupo);
+    const geral5S = media(grupos5S);
+    const geralSOL = media(gruposSOL);
+
+    return {
+        grupos5S, gruposSOL, geral5S, geralSOL,
+        solarBruto: indiceSolar(geral5S, geralSOL),
+        solar: indiceSolar(geral5S, geralSOL, respostas),
+        vetos: vetosSeguranca(respostas),
+        teto: TETO_VETO_SEGURANCA,
+    };
 };
