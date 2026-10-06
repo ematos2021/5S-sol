@@ -10,11 +10,11 @@ import {
     FAIXA_EXCELENCIA, FAIXA_CONSOLIDA, FAIXA_ATENCAO,
 } from '../data/cincoS';
 import {
-    FaPlus, FaTrash, FaSync, FaCheck, FaTimes, FaChevronLeft, FaBroom,
+    FaPlus, FaTrash, FaSync, FaCheck, FaTimes, FaChevronLeft, FaChevronRight, FaBroom,
     FaChartPie, FaListUl, FaMapMarkedAlt, FaCamera, FaArrowLeft, FaCheckCircle,
     FaIndustry, FaExclamationTriangle, FaBolt, FaGraduationCap, FaClipboardCheck, FaFilePdf,
     FaSun, FaShieldAlt, FaHardHat, FaTrophy, FaMagic, FaRobot, FaSave, FaPen, FaSpinner, FaCalendarAlt, FaInfoCircle,
-    FaSearch, FaFilter, FaLayerGroup, FaArrowUp, FaArrowDown, FaEye, FaBuilding,
+    FaSearch, FaFilter, FaLayerGroup, FaArrowUp, FaArrowDown, FaEye, FaBuilding, FaChartLine,
 } from 'react-icons/fa';
 
 const ACCENT = '#22C55E';
@@ -38,6 +38,42 @@ const areaKey = (a) => `${norm(a?.planta)}|${norm(a?.fabrica)}|${norm(a?.setor)}
 // Rótulo curto da área (inclui a linha/máquina quando houver)
 const areaLabel = (a) => `${a?.fabrica || ''} · ${a?.setor || ''}${a?.maquina ? ` · ${a.maquina}` : ''}`;
 
+// ─── Rotina semanal: toda área precisa de uma auditoria concluída por semana (seg–dom) ──
+const diaLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const dataLocal = (iso) => new Date(String(iso).slice(0, 10) + 'T12:00:00');
+// Segunda-feira da semana, como 'AAAA-MM-DD' — é a chave da semana
+const semanaDe = (iso) => { const d = dataLocal(iso); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return diaLocal(d); };
+const somaDias = (iso, n) => { const d = dataLocal(iso); d.setDate(d.getDate() + n); return diaLocal(d); };
+const semanaAtualKey = () => semanaDe(diaLocal(new Date()));
+const numSemana = (seg) => { // ISO 8601: a semana 1 é a que tem a primeira quinta do ano
+    const qui = dataLocal(somaDias(seg, 3));
+    const jan1 = new Date(qui.getFullYear(), 0, 1, 12);
+    return Math.floor((qui - jan1) / 86400000 / 7) + 1;
+};
+const fmtCurto = (iso) => dataLocal(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+const rotuloSemana = (seg) => `Semana ${numSemana(seg)} · ${fmtCurto(seg)} a ${fmtCurto(somaDias(seg, 6))}`;
+// areaKey → (semana → auditoria concluída mais recente daquela semana)
+const indexarSemanas = (auditorias) => {
+    const idx = new Map();
+    auditorias.forEach(a => {
+        if (a.status !== 'concluida' || !a.data_auditoria) return;
+        const k = areaKey(a), s = semanaDe(a.data_auditoria);
+        if (!idx.has(k)) idx.set(k, new Map());
+        const m = idx.get(k), atual = m.get(s);
+        if (!atual || String(a.data_auditoria) > String(atual.data_auditoria)) m.set(s, a);
+    });
+    return idx;
+};
+
+// Linha = união de máquinas (cadastro_planta_area.linha_id aponta a máquina para a linha)
+const emLinha = (estrutura, e) => e?.linha_id != null && estrutura.some(x => x.id === e.linha_id);
+const composicaoLinha = (estrutura, a) => {
+    const linha = estrutura.find(e => norm(e.planta) === norm(a?.planta) && norm(e.fabrica) === norm(a?.fabrica) && norm(e.setor) === norm(a?.setor) && norm(e.maquina) === norm(a?.maquina) && !emLinha(estrutura, e));
+    if (!linha) return [];
+    return estrutura.filter(e => e.linha_id === linha.id).map(e => e.maquina).filter(Boolean)
+        .sort((x, y) => (parseInt(String(x).match(/\d+/)?.[0] || 0, 10) - parseInt(String(y).match(/\d+/)?.[0] || 0, 10)) || String(x).localeCompare(String(y)));
+};
+
 const extractMaquina = (a) => {
     if (a?.maquina && String(a.maquina).trim()) return String(a.maquina).trim();
     const parts = (a?.titulo || '').split(' · ');
@@ -57,6 +93,70 @@ const tratarAuditoria = (a) => {
         setor: a.setor ? String(a.setor).trim() : null,
         maquina: maq || null,
     };
+};
+
+// Auditorias anteriores da MESMA linha/máquina, da mais recente para a mais antiga.
+// Só entra auditoria concluída: rascunho da área não é histórico, é trabalho em
+// andamento. E um relatório antigo não pode mostrar auditoria posterior a ele —
+// senão o documento impresso em março "sabe" o que aconteceu em maio.
+const historicoDaMaquina = (aud, todas, limite = 4) => {
+    if (!aud) return [];
+    const chave = areaKey(aud);
+    const dataDe = (a) => String(a?.data_auditoria || a?.created_at || '').slice(0, 10);
+    const ref = dataDe(aud);
+    return (todas || [])
+        .filter(a => a && a.id !== aud.id && a.status === 'concluida' && areaKey(a) === chave)
+        .filter(a => !ref || dataDe(a) <= ref)
+        .sort((a, b) => dataDe(b).localeCompare(dataDe(a)) || Number(b.id || 0) - Number(a.id || 0))
+        .slice(0, limite);
+};
+
+// ── Cor no papel ────────────────────────────────────────────────────────────────
+// A paleta é desenhada para tela escura. No relatório impresso ela encosta no branco
+// e some: âmbar #FBBF24 com texto branco em cima dá 1,7:1 de contraste, e a nota 4
+// (#84CC16) fica um círculo claro com número invisível. Esta função escurece a cor
+// até o branco ler em cima dela (4,5:1) — o que, por simetria, também garante que
+// ela leia como texto sobre o branco. Cor já escura passa intacta.
+// Só o relatório usa: na tela do app a paleta original continua valendo.
+const tinta = (hex, alvo = 4.5) => {
+    let m = String(hex || '').replace('#', '').trim();
+    if (m.length === 3) m = m.split('').map(c => c + c).join('');
+    if (!/^[0-9a-fA-F]{6}$/.test(m)) return hex;
+    let [r, g, b] = [0, 2, 4].map(i => parseInt(m.slice(i, i + 2), 16));
+    const canal = (c) => { const x = c / 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); };
+    const contraste = () => 1.05 / (0.2126 * canal(r) + 0.7152 * canal(g) + 0.0722 * canal(b) + 0.05);
+    for (let i = 0; i < 30 && contraste() < alvo; i++) {
+        r = Math.round(r * 0.9); g = Math.round(g * 0.9); b = Math.round(b * 0.9);
+    }
+    return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+};
+
+// Número do relatório: mora no título ("5S Nº 023 · ..."), que é como o app numera
+// as auditorias. Sem número no título (registro antigo), devolve null.
+const numeroRelatorio = (a) => {
+    const m = String(a?.titulo || '').match(/N[º°]\s*(\d+)/i);
+    return m ? m[1] : null;
+};
+
+// Scores de uma auditoria salva. Usa o que foi gravado e, quando faltar — auditoria
+// antiga, salva antes do SOL existir —, recalcula a partir das respostas em vez de
+// cair no Score 5S disfarçado de Índice Solar.
+const scoresDaAuditoria = (a) => {
+    const r = a?.respostas || {};
+    const g5 = a?.scores?.geral ?? scores5S(r).geral;
+    const gSol = a?.scores?.sol_geral ?? scoresSOL(r).geral;
+    return { g5, gSol, solar: a?.scores?.solar_bruto ?? a?.scores?.solar ?? indiceSolar(g5, gSol) };
+};
+
+// Score de cada dimensão (5 sensos + 3 pilares) de uma auditoria salva. Mesma
+// regra do scoresDaAuditoria: usa o que foi gravado e recalcula o que faltar.
+const dimsDaAuditoria = (a) => {
+    const r = a?.respostas || {};
+    const s5 = scores5S(r), sol = scoresSOL(r);
+    const out = {};
+    SENSOS.forEach(s => { out[s.id] = a?.scores?.[s.id] ?? s5[s.id]; });
+    SOL_PILARES.forEach(p => { out[p.id] = a?.scores?.[p.id] ?? sol[p.id]; });
+    return out;
 };
 
 function useIsMobile() {
@@ -199,18 +299,26 @@ const KpiMini = ({ icon, label, value, cor }) => (
     </div>
 );
 
-const ModalShell = ({ title, children, footer, onClose, wide }) => (
+// `acoes` entra no cabeçalho, à esquerda do X — é onde a mão já está quando o
+// modal está aberto. `largura` abre a folha além dos 760 padrão.
+const ModalShell = ({ title, children, footer, onClose, wide, claro, acoes, largura }) => {
+    const bd = claro ? '#e2e8f0' : 'var(--border-color-dark)';
+    return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 6000, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0.9rem' }}>
-        <div className="glass-panel" style={{ width: '100%', maxWidth: wide ? 760 : 600, maxHeight: '88vh', borderRadius: 16, border: '1px solid var(--border-color-dark)', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg-app)' }}>
-            <div style={{ padding: '1rem 1.3rem', borderBottom: '1px solid var(--border-color-dark)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--color-text-main)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>{title}</div>
-                <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--color-text-muted)', cursor: 'pointer' }}><FaTimes size={16} /></button>
+        <div className="glass-panel" style={{ width: '100%', maxWidth: largura || (wide ? 760 : 600), maxHeight: '88vh', borderRadius: 16, border: `1px solid ${bd}`, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: claro ? '#ffffff' : 'var(--bg-app)' }}>
+            <div style={{ padding: '1rem 1.3rem', borderBottom: `1px solid ${bd}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.8rem' }}>
+                <div style={{ fontSize: '1rem', fontWeight: 900, color: claro ? '#0F172A' : 'var(--color-text-main)', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>{title}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexShrink: 0 }}>
+                    {acoes}
+                    <button onClick={onClose} style={{ background: 'none', border: 'none', color: claro ? '#475569' : 'var(--color-text-muted)', cursor: 'pointer', display: 'flex' }}><FaTimes size={16} /></button>
+                </div>
             </div>
             <div style={{ flex: 1, overflowY: 'auto', padding: '1.3rem' }}>{children}</div>
-            <div style={{ padding: '0.9rem 1.3rem', borderTop: '1px solid var(--border-color-dark)', display: 'flex', justifyContent: 'flex-end', gap: '0.7rem', alignItems: 'center' }}>{footer}</div>
+            <div style={{ padding: '0.9rem 1.3rem', borderTop: `1px solid ${bd}`, display: 'flex', justifyContent: 'flex-end', gap: '0.7rem', alignItems: 'center' }}>{footer}</div>
         </div>
     </div>
-);
+    );
+};
 
 const inputSty = { width: '100%', background: 'var(--bg-surface-glass)', border: '1px solid var(--border-color-dark)', borderRadius: 8, padding: '0.5rem 0.7rem', color: 'var(--color-text-main)', fontSize: '0.82rem', outline: 'none' };
 const labelSty = { display: 'block', fontSize: '0.64rem', color: 'var(--color-text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.3rem' };
@@ -227,7 +335,7 @@ const Toast = ({ msg }) => (
 //  RELATÓRIO ANALÍTICO 5S — 1 documento executivo (HTML → imprimir/PDF)
 // ═══════════════════════════════════════════════════════════════════════════════
 // Monta o relatório e devolve { html, nomeArquivo } — quem exibe é o RelatorioViewer.
-function montarRelatorio5S(aud, emitente) {
+function montarRelatorio5S(aud, historico = []) {
     const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const respostas = aud.respostas || {};
     const sc = aud.scores && aud.scores.geral != null ? aud.scores : scores5S(respostas);
@@ -238,8 +346,10 @@ function montarRelatorio5S(aud, emitente) {
     const solar = aud.scores?.solar_bruto ?? aud.scores?.solar ?? indiceSolar(geral, scSol.geral);
     const selo = solSelo(solar);
     const nowStr = new Date().toLocaleDateString('pt-BR');
-    const scCorHex = (s) => s == null ? '#94a3b8' : s >= FAIXA_EXCELENCIA ? '#16a34a' : s >= FAIXA_CONSOLIDA ? '#d97706' : '#dc2626';
-    const notaHex = (n) => n == null ? '#94a3b8' : n <= 1 ? '#dc2626' : n === 2 ? '#ea580c' : n === 3 ? '#d97706' : n === 4 ? '#84cc16' : '#16a34a';
+    const scCorHex = (s) => tinta(s == null ? '#475569' : s >= FAIXA_EXCELENCIA ? '#16a34a' : s >= FAIXA_CONSOLIDA ? '#d97706' : '#dc2626');
+    const notaHex = (n) => tinta(n == null ? '#475569' : n <= 1 ? '#dc2626' : n === 2 ? '#ea580c' : n === 3 ? '#d97706' : n === 4 ? '#84cc16' : '#16a34a');
+    // Verde e âmbar da marca são claros demais para virar texto no papel.
+    const VERDE = tinta('#16a34a'), AMBAR = tinta('#d97706'), VERMELHO = tinta('#dc2626');
 
     // Conta 5S e SOL: o rótulo do KPI diz "críticos", e um EPI ou dispositivo de
     // segurança com nota 2 é o mais crítico que existe — ficava de fora.
@@ -256,20 +366,20 @@ function montarRelatorio5S(aud, emitente) {
         const poly = SENSOS.map((s, i) => pt(i, Math.max((sc[s.id] ?? 0) / 100, 0.02))).join(' ');
         const labels = SENSOS.map((s, i) => {
             const lx = cx + Math.cos(ang(i)) * R * 1.32, ly = cy + Math.sin(ang(i)) * R * 1.32;
-            return `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="800" fill="${s.cor}">${s.num} ${sc[s.id] != null ? sc[s.id] + '%' : '—'}</text>`;
+            return `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="800" fill="${tinta(s.cor)}">${s.num} ${sc[s.id] != null ? sc[s.id] + '%' : '—'}</text>`;
         }).join('');
         const axes = SENSOS.map((s, i) => `<line x1="${cx}" y1="${cy}" x2="${pt(i, 1).split(',')[0]}" y2="${pt(i, 1).split(',')[1]}" stroke="#e2e8f0" stroke-width="1"/>`).join('');
-        const dots = SENSOS.map((s, i) => { const [x, y] = pt(i, Math.max((sc[s.id] ?? 0) / 100, 0.02)).split(','); return `<circle cx="${x}" cy="${y}" r="4" fill="${s.cor}" stroke="#fff" stroke-width="1.5"/>`; }).join('');
+        const dots = SENSOS.map((s, i) => { const [x, y] = pt(i, Math.max((sc[s.id] ?? 0) / 100, 0.02)).split(','); return `<circle cx="${x}" cy="${y}" r="4" fill="${tinta(s.cor)}" stroke="#fff" stroke-width="1.5"/>`; }).join('');
         return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
             ${[0.25, 0.5, 0.75, 1].map(f => `<polygon points="${ring(f)}" fill="none" stroke="#e2e8f0" stroke-width="1"/>`).join('')}
-            ${axes}<polygon points="${poly}" fill="#22c55e33" stroke="#16a34a" stroke-width="2"/>${dots}${labels}</svg>`;
+            ${axes}<polygon points="${poly}" fill="#22c55e33" stroke="${VERDE}" stroke-width="2"/>${dots}${labels}</svg>`;
     })();
 
     const barrasSensos = SENSOS.map(s => {
         const v = sc[s.id];
         return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
-            <span style="width:150px;font-size:11px;font-weight:800;color:${s.cor};text-align:right;white-space:nowrap">${s.num} · ${esc(s.nome.split('·')[1].trim())}</span>
-            <div style="flex:1;height:14px;background:#f1f5f9;border-radius:7px;overflow:hidden"><div style="width:${v ?? 0}%;height:100%;background:${s.cor};border-radius:7px"></div></div>
+            <span style="width:150px;font-size:11px;font-weight:800;color:${tinta(s.cor)};text-align:right;white-space:nowrap">${s.num} · ${esc(s.nome.split('·')[1].trim())}</span>
+            <div style="flex:1;height:14px;background:#f1f5f9;border-radius:7px;overflow:hidden"><div style="width:${v ?? 0}%;height:100%;background:${tinta(s.cor)};border-radius:7px"></div></div>
             <span style="width:40px;font-size:12px;font-weight:900;color:${scCorHex(v)};text-align:right">${v != null ? v + '%' : '—'}</span></div>`;
     }).join('');
 
@@ -284,27 +394,27 @@ function montarRelatorio5S(aud, emitente) {
         const linhas = s.itens.map(it => {
             if (it.emAvaliacao || it.desabilitado) {
                 return `<tr>
-                    <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;font-size:11px">${esc(it.label)} <span style="display:inline-block;margin-left:6px;font-size:9px;color:#64748b;background:#f1f5f9;border:1px solid #e2e8f0;padding:1px 6px;border-radius:4px">Em avaliação</span><div style="font-size:9.5px;color:#94a3b8;font-weight:400;margin-top:1px">${esc(it.desc)}</div></td>
+                    <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;font-size:11px">${esc(it.label)} <span style="display:inline-block;margin-left:6px;font-size:10px;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;padding:1px 6px;border-radius:4px">Em avaliação</span><div style="font-size:10px;color:#475569;font-weight:400;margin-top:1px">${esc(it.desc)}</div></td>
                     <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;text-align:center;vertical-align:top;width:70px">
-                        <span style="display:inline-flex;padding:3px 7px;border-radius:6px;background:#f1f5f9;color:#64748b;font-size:10px;font-weight:800">Em avaliação</span>
-                        <div style="font-size:8.5px;color:#94a3b8;margin-top:2px">não pontuável</div></td></tr>`;
+                        <span style="display:inline-flex;padding:3px 7px;border-radius:6px;background:#f1f5f9;color:#475569;font-size:10px;font-weight:800">Em avaliação</span>
+                        <div style="font-size:10px;color:#475569;margin-top:2px">não pontuável</div></td></tr>`;
             }
             const n = respostas[it.id];
             const obs = aud.observacoes?.[it.id] || '';
             const fts = aud.fotos?.[it.id] || [];
             return `<tr>
-                <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;font-size:11px">${esc(it.label)}<div style="font-size:9.5px;color:#94a3b8;font-weight:400;margin-top:1px">${esc(it.desc)}</div>
+                <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;font-size:11px">${esc(it.label)}<div style="font-size:10px;color:#475569;font-weight:400;margin-top:1px">${esc(it.desc)}</div>
                 ${obs ? `<div style="font-size:10.5px;color:#b91c1c;margin-top:3px"><b>Desvio:</b> ${esc(obs)}</div>` : ''}
-                ${fts.length ? `<div style="display:flex;gap:6px;margin-top:5px;flex-wrap:wrap">${fts.map(f => `<div style="text-align:center"><img src="${f}" style="width:96px;height:72px;object-fit:cover;border-radius:4px;border:1px solid #e2e8f0"/><div style="font-size:9px;font-weight:800;color:#0f172a;margin-top:1px">Fig. ${figOf.get(f)}</div></div>`).join('')}</div>` : ''}</td>
+                ${fts.length ? `<div style="display:flex;gap:6px;margin-top:5px;flex-wrap:wrap">${fts.map(f => `<div style="text-align:center"><img src="${f}" style="width:96px;height:72px;object-fit:cover;border-radius:4px;border:1px solid #e2e8f0"/><div style="font-size:10px;font-weight:800;color:#0f172a;margin-top:1px">Fig. ${figOf.get(f)}</div></div>`).join('')}</div>` : ''}</td>
                 <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;text-align:center;vertical-align:top;width:70px">
                     <span style="display:inline-flex;width:30px;height:30px;border-radius:50%;background:${notaHex(n)};color:#fff;font-size:13px;font-weight:900;align-items:center;justify-content:center">${n != null ? n : '—'}</span>
-                    <div style="font-size:8.5px;color:#94a3b8;margin-top:2px">${n != null ? esc(ESCALA_5S[n].rotulo) : 'não avaliado'}</div></td></tr>`;
+                    <div style="font-size:10px;color:#475569;margin-top:2px">${n != null ? esc(ESCALA_5S[n].rotulo) : 'não avaliado'}</div></td></tr>`;
         }).join('');
         // A faixa colorida é um thead (não um div acima da tabela) para se repetir
         // no topo de cada página quando o senso não cabe inteiro em uma folha.
         return `<div class="bloco" style="margin-bottom:14px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">
             <table style="width:100%;border-collapse:collapse">
-                <thead><tr><th colspan="2" style="background:${s.cor};padding:7px 12px;text-align:left">
+                <thead><tr><th colspan="2" style="background:${tinta(s.cor)};padding:7px 12px;text-align:left">
                     <span style="font-weight:900;color:#fff;font-size:12px">${s.num} · ${esc(s.nome)}</span>
                     <span style="float:right;font-weight:900;color:#fff;font-size:13px">${scoresObj[s.id] != null ? scoresObj[s.id] + '%' : '—'}</span>
                 </th></tr></thead>
@@ -317,8 +427,8 @@ function montarRelatorio5S(aud, emitente) {
     const barrasSol = SOL_PILARES.map(p => {
         const v = scSol[p.id];
         return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
-            <span style="width:150px;font-size:11px;font-weight:800;color:${p.cor};text-align:right;white-space:nowrap">${p.num} · ${esc(p.nome)}</span>
-            <div style="flex:1;height:14px;background:#f1f5f9;border-radius:7px;overflow:hidden"><div style="width:${v ?? 0}%;height:100%;background:${p.cor};border-radius:7px"></div></div>
+            <span style="width:150px;font-size:11px;font-weight:800;color:${tinta(p.cor)};text-align:right;white-space:nowrap">${p.num} · ${esc(p.nome)}</span>
+            <div style="flex:1;height:14px;background:#f1f5f9;border-radius:7px;overflow:hidden"><div style="width:${v ?? 0}%;height:100%;background:${tinta(p.cor)};border-radius:7px"></div></div>
             <span style="width:40px;font-size:12px;font-weight:900;color:${scCorHex(v)};text-align:right">${v != null ? v + '%' : '—'}</span></div>`;
     }).join('');
     const solSvg = (() => {
@@ -338,27 +448,141 @@ function montarRelatorio5S(aud, emitente) {
             <text x="${W / 2}" y="${H - 8}" text-anchor="middle" font-size="12" font-weight="900" fill="#fde68a" opacity="0.85" letter-spacing="1">5S + SOL</text></svg>`;
     })();
 
+    // Ação renovada = proposta numa auditoria anterior, não feita, e trazida de
+    // novo para este plano. É o que o gestor precisa enxergar primeiro, então a
+    // linha inteira sai destacada e a descrição diz desde quando aquilo se arrasta.
+    const renovadas = planos.filter(pl => pl.origem);
     const planoRows = planos.map(pl => {
         const s = DIM_BY_ID[pl.senso] || SENSOS[0];
         const done = pl.status === 'concluida';
-        return `<tr><td style="padding:6px 10px;border-bottom:1px solid #f1f5f9"><span style="font-size:9px;font-weight:900;color:#fff;background:${s.cor};padding:2px 7px;border-radius:8px">${s.num}</span></td>
-        <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;font-size:11px">${esc(pl.descricao) || '—'}</td>
+        const renov = Boolean(pl.origem);
+        const vez = Number(pl.vez) || 2;
+        return `<tr style="${renov && !done ? 'background:#fff7ed' : ''}"><td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;${renov && !done ? 'border-left:3px solid #dc2626' : ''}"><span style="font-size:10px;font-weight:900;color:#fff;background:${tinta(s.cor)};padding:2px 7px;border-radius:8px">${s.num}</span></td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;font-size:11px">${esc(pl.descricao) || '—'}${renov ? `<div style="font-size:9.5px;font-weight:900;letter-spacing:.3px;color:${done ? VERDE : '#b91c1c'};margin-top:2px">RENOVADA · ${vez}ª VEZ · pendente desde ${fmtData(pl.origem.data)}${pl.origem.prazo ? ` · prazo original ${fmtData(pl.origem.prazo)}` : ''}</div>` : ''}</td>
         <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-size:11px">${esc(pl.resp) || '—'}</td>
         <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;text-align:center;font-size:11px">${pl.prazo ? fmtData(pl.prazo) : '—'}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;text-align:center"><span style="font-size:9px;font-weight:800;padding:2px 9px;border-radius:9px;background:${done ? '#dcfce7' : '#fef3c7'};color:${done ? '#16a34a' : '#d97706'}">${done ? 'CONCLUÍDA' : 'ABERTA'}</span></td></tr>`;
+        <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;text-align:center"><span style="font-size:10px;font-weight:800;padding:2px 9px;border-radius:9px;background:${done ? '#dcfce7' : '#fef3c7'};color:${tinta(done ? '#16a34a' : '#d97706', 5.5)}">${done ? 'CONCLUÍDA' : 'ABERTA'}</span></td></tr>`;
     }).join('');
 
     const galleryHtml = allPhotos.length === 0 ? '' : `
-        <h2 class="page-break" style="font-size:13px;color:#0f172a;border-bottom:2px solid #22c55e;padding-bottom:5px;margin:24px 0 10px">📷 Anexos fotográficos (${allPhotos.length})</h2>
+        <h2 class="page-break" style="font-size:13px;color:#0f172a;border-bottom:2px solid #22c55e;padding-bottom:5px;margin:24px 0 10px">Anexos fotográficos (${allPhotos.length})</h2>
         ${allPhotos.map(p => `<div class="avoid-break" style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-bottom:16px">
             <div style="background:#f1f5f9;border-left:5px solid #22c55e;padding:8px 12px;margin-bottom:10px;font-size:12px;font-weight:700;color:#0f172a;display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
-                <span>FIGURA ${p.fig}</span><span style="font-weight:400;color:#64748b">${p.senso} · ${esc(p.item)}</span></div>
+                <span>FIGURA ${p.fig}</span><span style="font-weight:400;color:#475569">${p.senso} · ${esc(p.item)}</span></div>
             <img src="${p.src}" style="width:100%;max-height:640px;object-fit:contain;display:block;border-radius:4px;border:1px solid #eee"/></div>`).join('')}`;
 
     const h2 = (t) => `<h2 style="font-size:13px;color:#0f172a;border-bottom:2px solid #22c55e;padding-bottom:5px;margin:24px 0 10px">${t}</h2>`;
     const kpi = (val, lbl, cor) => `<div style="flex:1;min-width:0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:9px 6px;text-align:center">
         <div style="font-size:19px;font-weight:900;color:${cor};line-height:1.15;white-space:nowrap">${val}</div>
-        <div style="font-size:8.5px;color:#64748b;text-transform:uppercase;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${lbl}</div></div>`;
+        <div style="font-size:10px;color:#475569;text-transform:uppercase;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${lbl}</div></div>`;
+
+    // ── Histórico da linha/máquina ──────────────────────────────────────────────
+    // O gestor lê o relatório de hoje sem ter os anteriores na mão. Este bloco
+    // fecha o corpo do documento com o que ele precisa lembrar: como a linha vinha
+    // pontuando e o que ficou pendente das auditorias passadas — em especial as
+    // ações vencidas, que é o que derruba o senso de Disciplina na próxima visita.
+    const historicoSecao = (() => {
+        const hist = (historico || []).filter(Boolean);
+        const tdH = 'padding:6px 10px;border-bottom:1px solid #f1f5f9;font-size:11px';
+        const thH = 'padding:6px 10px;font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:.3px';
+
+        if (!hist.length) {
+            return `${h2('Histórico desta linha/máquina')}
+        <div class="avoid-break" style="border:1px dashed #cbd5e1;border-radius:8px;padding:12px 16px;font-size:11.5px;color:#475569">
+            Não há auditoria concluída anterior nesta linha/máquina — este relatório é o ponto de partida da série.
+        </div>`;
+        }
+
+        const criticosDe = (a) => [...SENSOS, ...SOL_PILARES].reduce((n, g) =>
+            n + g.itens.filter(it => !it.emAvaliacao && !it.desabilitado && a?.respostas?.[it.id] != null && a.respostas[it.id] <= 2).length, 0);
+
+        // A auditoria atual entra como primeira linha da série: o gestor lê a
+        // tendência incluindo o dia de hoje, sem ter de comparar de cabeça.
+        const serie = [
+            { a: aud, atual: true, s: { g5: geral, gSol: scSol.geral, solar }, crit: criticos.length },
+            ...hist.map(a => ({ a, atual: false, s: scoresDaAuditoria(a), crit: criticosDe(a) })),
+        ];
+        const pct = (v) => v != null ? `${v}%` : '—';
+        const delta = (atual, anterior) => {
+            if (atual == null || anterior == null) return '';
+            const d = atual - anterior;
+            if (d === 0) return `<span style="color:#475569;font-weight:800;font-size:10px"> =</span>`;
+            return `<span style="color:${d > 0 ? VERDE : VERMELHO};font-weight:900;font-size:10px"> ${d > 0 ? '▲' : '▼'}${Math.abs(d)}</span>`;
+        };
+        const linhasHist = serie.map((e, i) => {
+            const ant = serie[i + 1];
+            const pl = e.a.planos || [];
+            const feitasAud = pl.filter(p => p.status === 'concluida').length;
+            const num = numeroRelatorio(e.a);
+            return `<tr style="${e.atual ? 'background:#f0fdf4' : ''}">
+            <td style="${tdH};white-space:nowrap;font-weight:800;color:#334155">${num ? `Nº ${esc(num)}` : '—'}</td>
+            <td style="${tdH};font-weight:${e.atual ? 800 : 600};white-space:nowrap">${fmtData(e.a.data_auditoria)}${e.atual ? ' <span style="font-size:9px;color:${VERDE};font-weight:900">RELATÓRIO ATUAL</span>' : ''}</td>
+            <td style="${tdH}">${esc(e.a.auditor || '—')}</td>
+            <td style="${tdH};text-align:center;font-weight:900;color:${scCorHex(e.s.solar)};white-space:nowrap">${pct(e.s.solar)}${ant ? delta(e.s.solar, ant.s.solar) : ''}</td>
+            <td style="${tdH};text-align:center;font-weight:800;color:${scCorHex(e.s.g5)}">${pct(e.s.g5)}</td>
+            <td style="${tdH};text-align:center;font-weight:800;color:${scCorHex(e.s.gSol)}">${pct(e.s.gSol)}</td>
+            <td style="${tdH};text-align:center;font-weight:800;color:${e.crit ? VERMELHO : VERDE}">${e.crit}</td>
+            <td style="${tdH};text-align:center">${pl.length ? `${feitasAud}/${pl.length}` : '—'}</td></tr>`;
+        }).join('');
+
+        const acoes = hist.flatMap(a => (a.planos || []).map(p => ({ p, a })));
+        const vencida = (p) => Boolean(p.prazo) && String(p.prazo).slice(0, 10) < hojeISO();
+        const feitas = acoes.filter(x => x.p.status === 'concluida');
+        const abertas = acoes.filter(x => x.p.status !== 'concluida');
+        const vencidas = abertas.filter(x => vencida(x.p));
+        // Aberta antes de concluída, e a mais atrasada no topo: a lista já sai na
+        // ordem em que o gestor vai cobrar.
+        const ordenadas = [...acoes].sort((x, y) =>
+            (x.p.status === 'concluida' ? 1 : 0) - (y.p.status === 'concluida' ? 1 : 0)
+            || String(x.p.prazo || '9999-12-31').localeCompare(String(y.p.prazo || '9999-12-31')));
+
+        const linhasAcoes = ordenadas.map(({ p, a }) => {
+            const s = DIM_BY_ID[p.senso] || SENSOS[0];
+            const done = p.status === 'concluida';
+            // Renovada nesta auditoria: continua aberta lá atrás — é a prova de que
+            // foi proposta e não feita — mas aqui já está sendo recobrada.
+            const renovadaAqui = !done && planos.some(x => x.origem?.plano_id === p.id);
+            const atrasada = !done && !renovadaAqui && vencida(p);
+            const rotulo = done ? 'CONCLUÍDA' : renovadaAqui ? 'RENOVADA NESTA' : atrasada ? 'VENCIDA' : 'ABERTA';
+            // 5,5:1 contra o branco porque o selo fica sobre um fundo já tingido —
+            // no papel, 4,5 contra o branco vira ~4,1 contra o creme do selo.
+            const cor = tinta(done ? '#16a34a' : renovadaAqui ? '#4338ca' : atrasada ? '#dc2626' : '#d97706', 5.5);
+            const fundo = done ? '#dcfce7' : renovadaAqui ? '#e0e7ff' : atrasada ? '#fee2e2' : '#fef3c7';
+            return `<tr>
+            <td style="${tdH};white-space:nowrap;color:#475569">${numeroRelatorio(a) ? `<b style="color:#334155">Nº ${esc(numeroRelatorio(a))}</b> · ` : ''}${fmtData(a.data_auditoria)}</td>
+            <td style="${tdH};text-align:center"><span style="font-size:9.5px;font-weight:900;color:#fff;background:${tinta(s.cor)};padding:2px 6px;border-radius:8px">${s.num}</span></td>
+            <td style="${tdH};font-weight:700">${esc(p.descricao) || '—'}</td>
+            <td style="${tdH}">${esc(p.resp) || '—'}</td>
+            <td style="${tdH};text-align:center;white-space:nowrap">${p.prazo ? fmtData(p.prazo) : '—'}</td>
+            <td style="${tdH};text-align:center"><span style="font-size:9.5px;font-weight:800;padding:2px 8px;border-radius:9px;background:${fundo};color:${cor};white-space:nowrap">${rotulo}</span></td></tr>`;
+        }).join('');
+
+        const antiga = serie[serie.length - 1];
+        const evolucao = (solar != null && antiga.s.solar != null)
+            ? `Índice Solar: <b>${antiga.s.solar}%</b> em ${fmtData(antiga.a.data_auditoria)} → <b style="color:${scCorHex(solar)}">${solar}%</b> nesta auditoria.`
+            : 'Série ainda sem Índice Solar comparável.';
+
+        return `${h2('Histórico desta linha/máquina — últimas auditorias')}
+        <div class="avoid-break" style="background:#f8fafc;border:1px solid #e2e8f0;border-left:4px solid #0f172a;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:11.5px;color:#334155;line-height:1.6">
+            ${evolucao}
+            ${acoes.length
+                ? `Das <b>${acoes.length}</b> ações das auditorias anteriores: <b style="color:${VERDE}">${feitas.length} concluída(s)</b> e <b style="color:${abertas.length ? AMBAR : VERDE}">${abertas.length} em aberto</b>${vencidas.length ? ` — <b style="color:${VERMELHO}">${vencidas.length} fora do prazo</b>` : ''}.`
+                : 'As auditorias anteriores não deixaram ações registradas.'}
+        </div>
+        <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;margin-bottom:16px">
+            <thead><tr style="background:#f1f5f9">
+                <th style="${thH};text-align:left">Relatório</th><th style="${thH};text-align:left">Data</th><th style="${thH};text-align:left">Auditor</th>
+                <th style="${thH}">Índice Solar</th><th style="${thH}">5S</th><th style="${thH}">SOL</th>
+                <th style="${thH}">Críticos</th><th style="${thH}">Ações</th></tr></thead>
+            <tbody>${linhasHist}</tbody></table>
+        ${acoes.length ? `<div style="font-size:12px;font-weight:900;color:#0f172a;margin:0 0 6px">Plano de ação das auditorias anteriores — o que foi feito e o que não foi</div>
+        <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0">
+            <thead><tr style="background:#f1f5f9">
+                <th style="${thH};text-align:left">Auditoria</th><th style="${thH}">Pilar</th>
+                <th style="${thH};text-align:left">Ação</th><th style="${thH};text-align:left">Responsável</th>
+                <th style="${thH}">Prazo</th><th style="${thH}">Situação</th></tr></thead>
+            <tbody>${linhasAcoes}</tbody></table>` : ''}`;
+    })();
 
     const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(aud.titulo)} · Relatório</title>
 <style>
@@ -399,161 +623,66 @@ function montarRelatorio5S(aud, emitente) {
 <button class="no-print" onclick="window.print()" style="position:fixed;top:16px;right:16px;z-index:99;background:#16a34a;color:#fff;border:none;border-radius:8px;padding:10px 18px;font-size:13px;font-weight:800;cursor:pointer;box-shadow:0 4px 14px rgba(22,163,74,.4)">🖨️ Imprimir / Salvar PDF</button>
 <div class="sheet" style="max-width:900px;margin:24px auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 10px 25px rgba(0,0,0,.1)">
     <div style="background:linear-gradient(120deg,#0d2818 55%,#7c2d12);padding:20px 30px;display:flex;justify-content:space-between;align-items:center;gap:14px">
-        <div><h1 style="margin:0;color:#fff;font-size:20px;font-weight:900">🧹 Relatório 5S <span style="color:#fbbf24">☀️ SOL</span></h1>
+        <div><h1 style="margin:0;color:#fff;font-size:20px;font-weight:900">Relatório 5S <span style="color:#fbbf24">+ SOL</span></h1>
         <p style="margin:3px 0 0;color:#fcd34d;font-size:10px;text-transform:uppercase;letter-spacing:1px;font-weight:700">5S + Programa SOL · Segurança · Organização · Limpeza</p></div>
-        <div style="text-align:right;color:#cbd5e1;font-size:10px"><div style="font-size:13px;color:#fff;font-weight:900">${esc(aud.fabrica)} · ${esc(aud.setor)}${aud.maquina ? ` · ${esc(aud.maquina)}` : ''}</div><div>${esc(aud.planta)}</div><div>Emitido em ${nowStr} por ${esc(emitente)}</div></div>
+        <div style="text-align:right;color:#cbd5e1;font-size:10px"><div style="font-size:13px;color:#fff;font-weight:900">${esc(aud.fabrica)} · ${esc(aud.setor)}${aud.maquina ? ` · ${esc(aud.maquina)}` : ''}</div><div>${esc(aud.planta)}</div><div>Monitoramento realizado em ${fmtData(aud.data_auditoria)}</div></div>
     </div>
     <div style="padding:22px 30px">
         <div style="font-size:15px;font-weight:900;color:#0f172a;margin-bottom:4px">${esc(aud.titulo)}</div>
-        <div style="font-size:11px;color:#64748b;margin-bottom:14px">Auditor: <b>${esc(aud.auditor) || '—'}</b>${aud.acompanhante ? ` · Acompanhante: <b>${esc(aud.acompanhante)}</b>` : ''} · Data: <b>${fmtData(aud.data_auditoria)}</b> · Status: <span style="font-weight:800;color:${aud.status === 'concluida' ? '#16a34a' : '#d97706'}">${aud.status === 'concluida' ? 'CONCLUÍDA' : 'EM ABERTO'}</span></div>
+        <div style="font-size:11px;color:#475569;margin-bottom:14px">Auditor: <b>${esc(aud.auditor) || '—'}</b>${aud.acompanhante ? ` · Acompanhante: <b>${esc(aud.acompanhante)}</b>` : ''} · Data: <b>${fmtData(aud.data_auditoria)}</b> · Status: <span style="font-weight:800;color:${aud.status === 'concluida' ? VERDE : AMBAR}">${aud.status === 'concluida' ? 'CONCLUÍDA' : 'EM ABERTO'}</span></div>
 
         <div class="avoid-break" style="display:flex;gap:10px;margin-bottom:6px">
-            ${kpi(solar != null ? solar + '%' : '—', `${selo.emoji} Índice Solar`, selo.cor)}
+            ${kpi(solar != null ? solar + '%' : '—', 'Índice Solar', tinta(selo.cor))}
             ${kpi(geral != null ? geral + '%' : '—', 'Score 5S', scCorHex(geral))}
             ${kpi(scSol.geral != null ? scSol.geral + '%' : '—', 'Score SOL', scCorHex(scSol.geral))}
-            ${kpi(String(criticos.length), 'Críticos (≤2)', criticos.length ? '#dc2626' : '#16a34a')}
-            ${kpi(String(planosAbertos.length), 'Ações abertas', planosAbertos.length ? '#d97706' : '#16a34a')}
+            ${kpi(String(criticos.length), 'Críticos (≤2)', criticos.length ? VERMELHO : VERDE)}
+            ${kpi(String(planosAbertos.length), 'Ações abertas', planosAbertos.length ? AMBAR : VERDE)}
         </div>
 
-        ${(aud.analise_ia || '').trim() ? `${h2('🤖 Resumo Executivo')}
-        <div class="avoid-break" style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:8px;padding:12px 16px;margin-bottom:6px">
+        ${(aud.analise_ia || '').trim() ? `${h2('Resumo Executivo')}
+        <div class="avoid-break" style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid ${VERDE};border-radius:8px;padding:12px 16px;margin-bottom:6px">
             ${aud.analise_ia.trim().split(/\n{2,}/).map(p => p.trim()).filter(Boolean).map(p => `<p style="margin:0 0 8px;font-size:12.5px;line-height:1.65;color:#334155">${esc(p)}</p>`).join('')}
         </div>` : ''}
 
-        ${h2('📡 Radar dos sensos')}
+        ${h2('Radar dos sensos')}
         <div class="avoid-break" style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
             <div style="flex-shrink:0">${radarSvg}</div>
             <div style="flex:1;min-width:280px">${barrasSensos}
-                <div style="font-size:9.5px;color:#94a3b8;margin-top:8px">Escala: ${ESCALA_5S.map(e => `<b>${e.nota}</b> ${e.rotulo} (${PONTOS_NOTA[e.nota]}%)`).join(' · ')}. A escala não é linear — só a nota 5 vale 100% do critério. Score do senso = média dos critérios.</div>
+                <div style="font-size:10px;color:#475569;margin-top:8px">Escala: ${ESCALA_5S.map(e => `<b>${e.nota}</b> ${e.rotulo} (${PONTOS_NOTA[e.nota]}%)`).join(' · ')}. A escala não é linear — só a nota 5 vale 100% do critério. Score do senso = média dos critérios.</div>
             </div>
         </div>
 
         ${scSol.geral != null ? `
-        ${h2('☀️ Programa SOL — Segurança · Organização · Limpeza')}
+        ${h2('Programa SOL — Segurança · Organização · Limpeza')}
         <div class="avoid-break" style="display:flex;gap:24px;align-items:center;flex-wrap:wrap;background:linear-gradient(120deg,#fff7ed,#fff);border:1px solid #fed7aa;border-radius:10px;padding:16px">
-            <div style="flex-shrink:0;text-align:center">${solSvg}<div style="font-size:13px;font-weight:900;color:${selo.cor};margin-top:6px">${selo.emoji} ${solar}% · ${selo.label}</div></div>
+            <div style="flex-shrink:0;text-align:center">${solSvg}<div style="font-size:13px;font-weight:900;color:${tinta(selo.cor)};margin-top:6px">${solar}% · ${selo.label}</div></div>
             <div style="flex:1;min-width:280px">${barrasSol}
                 <div style="font-size:10.5px;color:#7c2d12;margin-top:8px;font-style:italic">“${selo.frase}”</div>
-                <div style="font-size:9.5px;color:#94a3b8;margin-top:4px">Índice Solar = média do Score 5S com o Score SOL. SOL = Segurança · Organização · Limpeza (mesma escala 0–5).</div>
+                <div style="font-size:10px;color:#475569;margin-top:4px">Índice Solar = média do Score 5S com o Score SOL. SOL = Segurança · Organização · Limpeza (mesma escala 0–5).</div>
             </div>
         </div>
-        ${h2('🔆 Detalhamento por pilar SOL')}
+        ${h2('Detalhamento por pilar SOL')}
         ${solDetalheHtml}` : ''}
 
-        ${h2('🔎 Detalhamento por senso (5S)')}
+        ${h2('Detalhamento por senso (5S)')}
         ${detalheHtml}
 
-        ${planos.length ? h2(`📋 Plano de Ação 5S + SOL (${planos.length - planosAbertos.length}/${planos.length} concluídas)`) + `
+        ${planos.length ? h2(`Plano de Ação 5S + SOL (${planos.length - planosAbertos.length}/${planos.length} concluídas${renovadas.length ? ` · ${renovadas.length} renovada(s) de auditoria anterior` : ''})`) + `
         <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0">
-            <thead><tr style="background:#f1f5f9"><th style="padding:6px 10px;font-size:10px;color:#64748b">Pilar</th><th style="padding:6px 10px;font-size:10px;text-align:left;color:#64748b">Ação</th><th style="padding:6px 10px;font-size:10px;text-align:left;color:#64748b">Responsável</th><th style="padding:6px 10px;font-size:10px;color:#64748b">Prazo</th><th style="padding:6px 10px;font-size:10px;color:#64748b">Status</th></tr></thead>
+            <thead><tr style="background:#f1f5f9"><th style="padding:6px 10px;font-size:10px;color:#475569">Pilar</th><th style="padding:6px 10px;font-size:10px;text-align:left;color:#475569">Ação</th><th style="padding:6px 10px;font-size:10px;text-align:left;color:#475569">Responsável</th><th style="padding:6px 10px;font-size:10px;color:#475569">Prazo</th><th style="padding:6px 10px;font-size:10px;color:#475569">Status</th></tr></thead>
             <tbody>${planoRows}</tbody></table>` : ''}
+
+        ${historicoSecao}
 
         ${galleryHtml}
 
-        <div style="margin-top:28px;padding-top:12px;border-top:1px solid #e2e8f0;text-align:center;color:#94a3b8;font-size:10px;font-weight:700">Documento gerado automaticamente · ${nowStr}</div>
+        <div style="margin-top:28px;padding-top:12px;border-top:1px solid #e2e8f0;text-align:center;color:#475569;font-size:10px;font-weight:700">Documento gerado automaticamente · ${nowStr}</div>
     </div>
 </div></body></html>`;
 
     const nomeArquivo = `5S_${String(aud.fabrica || '').replace(/[^a-z0-9]/gi, '_')}_${String(aud.setor || '').replace(/[^a-z0-9]/gi, '_')}${aud.maquina ? '_' + String(aud.maquina).replace(/[^a-z0-9]/gi, '_') : ''}_${nowStr.replace(/\//g, '-')}.html`;
     return { html, nomeArquivo };
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  DEMONSTRATIVO DA NOTA — a conta aberta, do critério ao Índice Solar
-// ═══════════════════════════════════════════════════════════════════════════════
-/*
- * Com a curva progressiva (nota 3 = 45%, 4 = 72%) o número final deixou de ser
- * uma conta que a área faz de cabeça. Esta tabela mostra cada etapa: quanto cada
- * nota virou de ponto, a média de cada senso e como 5S e SOL se combinam. Fica
- * no formulário para o auditor ter a resposta pronta quando perguntarem
- * "de onde saiu esse número?".
- */
-const DemonstrativoNota = ({ respostas, isMobile }) => {
-    const d = demonstrativoNota(respostas);
-    const selo = solSelo(d.solar);
-
-    const th = { fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.3px', textTransform: 'uppercase', color: 'var(--color-text-subtle)', padding: '0.4rem 0.5rem', textAlign: 'right', whiteSpace: 'nowrap' };
-    const td = { fontSize: '0.72rem', color: 'var(--color-text-main)', padding: '0.35rem 0.5rem', textAlign: 'right', borderTop: '1px solid var(--border-color-dark)', whiteSpace: 'nowrap' };
-    const tdL = { ...td, textAlign: 'left', whiteSpace: 'normal' };
-
-    const bloco = (grupos, titulo, corTitulo, media, formula) => (
-        <div style={{ marginBottom: '0.9rem' }}>
-            <div style={{ fontSize: '0.68rem', fontWeight: 900, letterSpacing: '0.5px', textTransform: 'uppercase', color: corTitulo, marginBottom: '0.35rem' }}>{titulo}</div>
-            <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: isMobile ? 380 : 0 }}>
-                    <thead>
-                        <tr>
-                            <th style={{ ...th, textAlign: 'left', width: '100%' }}>Critério</th>
-                            <th style={th}>Nota</th>
-                            <th style={th}>Vale</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {grupos.map(g => (
-                            <React.Fragment key={g.id}>
-                                <tr>
-                                    <td colSpan={3} style={{ ...td, textAlign: 'left', background: `${g.cor}18`, borderLeft: `3px solid ${g.cor}`, fontWeight: 900, fontSize: '0.7rem', color: g.cor }}>
-                                        {g.num} · {g.nome}
-                                        <span style={{ float: 'right', color: scoreCor(g.score) }}>{g.score != null ? `${g.score}%` : '—'}</span>
-                                    </td>
-                                </tr>
-                                {g.itens.map(i => (
-                                    <tr key={i.id} style={{ opacity: i.fora ? 0.5 : 1 }}>
-                                        <td style={tdL}>{i.label}</td>
-                                        <td style={{ ...td, fontWeight: 800, color: i.fora ? 'var(--color-text-subtle)' : notaCor(i.nota) }}>{i.fora ? '—' : (i.nota ?? '—')}</td>
-                                        <td style={{ ...td, fontWeight: 800 }}>{i.fora ? 'não pontua' : (i.pontos != null ? `${i.pontos}%` : '—')}</td>
-                                    </tr>
-                                ))}
-                                <tr>
-                                    <td colSpan={3} style={{ ...td, textAlign: 'right', fontSize: '0.64rem', color: 'var(--color-text-muted)', borderTop: 'none', paddingTop: 0, paddingBottom: '0.5rem' }}>
-                                        {g.respondidos ? `${g.soma}% ÷ ${g.respondidos} critério(s) = ` : 'sem critério avaliado — '}
-                                        <b style={{ color: scoreCor(g.score) }}>{g.score != null ? `${g.score}%` : '—'}</b>
-                                    </td>
-                                </tr>
-                            </React.Fragment>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-            <div style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--color-text-main)', textAlign: 'right', marginTop: '0.3rem' }}>
-                {formula} = <span style={{ color: scoreCor(media), fontWeight: 900 }}>{media != null ? `${media}%` : '—'}</span>
-            </div>
-        </div>
-    );
-
-    const linhaFinal = (rotulo, valor, cor, obs) => (
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '0.6rem', padding: '0.3rem 0' }}>
-            <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>{rotulo}{obs && <span style={{ fontSize: '0.62rem', color: 'var(--color-text-subtle)' }}> · {obs}</span>}</span>
-            <span style={{ fontSize: '0.82rem', fontWeight: 900, color: cor, whiteSpace: 'nowrap' }}>{valor}</span>
-        </div>
-    );
-
-    return (
-        <div style={{ marginBottom: '1rem', borderRadius: 12, border: '1px solid var(--border-color-dark)', background: 'var(--bg-surface-glass)', padding: '0.9rem 1rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.15rem' }}>
-                <FaListUl size={11} color="#60A5FA" />
-                <span style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--color-text-main)' }}>Demonstrativo da nota final</span>
-                <span style={{ fontSize: '0.58rem', fontWeight: 800, letterSpacing: '0.5px', color: '#60A5FA', background: '#3B82F61f', border: '1px solid #3B82F655', borderRadius: 5, padding: '0.1rem 0.4rem' }}>USO INTERNO · NÃO SAI NO RELATÓRIO</span>
-            </div>
-            <div style={{ fontSize: '0.66rem', color: 'var(--color-text-muted)', marginBottom: '0.8rem', lineHeight: 1.5 }}>
-                A escala não é linear: <b>0</b>→{PONTOS_NOTA[0]}% · <b>1</b>→{PONTOS_NOTA[1]}% · <b>2</b>→{PONTOS_NOTA[2]}% · <b>3</b>→{PONTOS_NOTA[3]}% · <b>4</b>→{PONTOS_NOTA[4]}% · <b>5</b>→{PONTOS_NOTA[5]}%. Cada senso/pilar é a média dos seus critérios; critérios ainda não avaliados ficam fora da conta.
-            </div>
-
-            {bloco(d.grupos5S, 'Programa 5S', ACCENT, d.geral5S, 'Score 5S = média dos 5 sensos')}
-            {bloco(d.gruposSOL, 'Programa SOL', SOL_ACCENT, d.geralSOL, 'Score SOL = média dos 3 pilares')}
-
-            <div style={{ borderTop: `2px solid ${SOL_ACCENT}55`, marginTop: '0.6rem', paddingTop: '0.5rem' }}>
-                {linhaFinal('Score 5S', d.geral5S != null ? `${d.geral5S}%` : '—', scoreCor(d.geral5S))}
-                {linhaFinal('Score SOL', d.geralSOL != null ? `${d.geralSOL}%` : '—', scoreCor(d.geralSOL))}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border-color-dark)' }}>
-                    <span style={{ fontSize: '0.78rem', fontWeight: 900, color: 'var(--color-text-main)' }}>Nota final <span style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--color-text-subtle)' }}>(média do 5S com o SOL)</span></span>
-                    <span style={{ fontSize: '1.15rem', fontWeight: 900, color: selo.cor, whiteSpace: 'nowrap' }}>{selo.emoji} {d.solar != null ? `${d.solar}%` : '—'}</span>
-                </div>
-                <div style={{ fontSize: '0.64rem', color: 'var(--color-text-muted)', textAlign: 'right' }}>{selo.label} · faixas: 🌑 &lt;{FAIXA_ATENCAO}% · 🌅 {FAIXA_ATENCAO}–{FAIXA_CONSOLIDA - 1}% · 🌤️ {FAIXA_CONSOLIDA}–{FAIXA_EXCELENCIA - 1}% · ☀️ ≥{FAIXA_EXCELENCIA}%</div>
-            </div>
-        </div>
-    );
-};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  VISUALIZADOR DO RELATÓRIO (overlay em tela cheia)
@@ -622,7 +751,7 @@ const useRelatorioViewer = () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 //  WORKSPACE DA AUDITORIA (overlay em tela cheia)
 // ═══════════════════════════════════════════════════════════════════════════════
-const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
+const Auditoria5S = ({ aud, onClose, onSave, saving, historico = [] }) => {
     const isMobile = useIsMobile();
     const [respostas, setRespostas] = useState(aud.respostas || {});
     const [observacoes, setObservacoes] = useState(aud.observacoes || {});
@@ -645,6 +774,20 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
     const sc = scores5S(respostas);           // 5S (radar + geral)
     const scSol = scoresSOL(respostas);        // SOL (3 pilares + geral)
     const solar = indiceSolar(sc.geral, scSol.geral); // índice combinado
+
+    // ── Pendências das auditorias anteriores ────────────────────────────────
+    // Ação proposta e não concluída não morre no relatório antigo: o auditor a
+    // renova aqui e ela entra neste plano marcada como reincidente. O registro
+    // antigo fica intacto — ele é a prova de que a ação foi proposta e não feita.
+    const pendenciasAnteriores = (historico || [])
+        .flatMap(a => (a.planos || []).filter(p => p.status !== 'concluida').map(p => ({ p, a })))
+        .sort((x, y) => String(x.p.prazo || '9999-12-31').localeCompare(String(y.p.prazo || '9999-12-31')));
+    const jaRenovada = (p) => planos.some(x => x.origem?.plano_id === p.id);
+    const renovarAcao = (p, a) => setPlanos(prev => [...prev, {
+        id: uid(), senso: p.senso, descricao: p.descricao, resp: p.resp, prazo: '', status: 'aberta',
+        vez: (Number(p.vez) || 1) + 1,
+        origem: { plano_id: p.id, auditoria_id: a.id, data: a.data_auditoria, prazo: p.prazo || null },
+    }]);
 
     const setNota = (itemId, n) => setRespostas(p => ({ ...p, [itemId]: p[itemId] === n ? null : n }));
     const capture = async (itemId, e) => {
@@ -855,6 +998,39 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
                     )}
                 </div>
 
+                {/* Pendências das auditorias anteriores — renovar o que não foi feito */}
+                {pendenciasAnteriores.length > 0 && (
+                    <div style={{ marginBottom: '1rem' }}>
+                        <div style={{ fontSize: '0.72rem', fontWeight: 800, letterSpacing: '1px', textTransform: 'uppercase', color: '#DC2626', marginBottom: '0.35rem' }}>
+                            Pendências de auditorias anteriores ({pendenciasAnteriores.length})
+                        </div>
+                        <div style={{ fontSize: '0.68rem', color: 'var(--color-text-muted)', marginBottom: '0.55rem', lineHeight: 1.5 }}>
+                            Ações propostas nesta linha/máquina e não concluídas. <b>Renovar</b> traz a ação para o plano desta auditoria, destacada como reincidente no relatório — o registro antigo continua como está.
+                        </div>
+                        {pendenciasAnteriores.map(({ p, a }) => {
+                            const s = DIM_BY_ID[p.senso] || SENSOS[0];
+                            const renovada = jaRenovada(p);
+                            const atrasada = p.prazo && String(p.prazo).slice(0, 10) < hojeISO();
+                            return (
+                                <div key={`${a.id}_${p.id}`} style={{ background: 'var(--bg-surface-glass)', border: '1px solid var(--border-color-dark)', borderLeft: `4px solid ${atrasada ? '#DC2626' : '#D97706'}`, borderRadius: 10, padding: '0.55rem 0.75rem', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', opacity: renovada ? 0.6 : 1 }}>
+                                    <span style={{ fontSize: '0.58rem', fontWeight: 900, color: '#fff', background: s.cor, padding: '0.1rem 0.45rem', borderRadius: 7 }}>{s.num}</span>
+                                    <div style={{ flex: 1, minWidth: 180 }}>
+                                        <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--color-text-main)' }}>{p.descricao || '—'}</div>
+                                        <div style={{ fontSize: '0.64rem', color: 'var(--color-text-subtle)', marginTop: '0.1rem' }}>
+                                            auditoria de {fmtData(a.data_auditoria)} · {p.resp || 'sem responsável'} · prazo {p.prazo ? fmtData(p.prazo) : '—'}
+                                            {atrasada && <span style={{ color: '#DC2626', fontWeight: 800 }}> · VENCIDA</span>}
+                                        </div>
+                                    </div>
+                                    <button onClick={() => renovarAcao(p, a)} disabled={renovada}
+                                        style={{ ...btnSec, fontSize: '0.68rem', padding: '0.3rem 0.7rem', borderColor: renovada ? 'var(--border-color-dark)' : '#DC262655', color: renovada ? 'var(--color-text-subtle)' : '#F87171', cursor: renovada ? 'default' : 'pointer' }}>
+                                        {renovada ? 'Renovada' : 'Renovar'}
+                                    </button>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+
                 {/* Plano de ação 5S + SOL */}
                 <div style={{ marginBottom: '1rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.6rem' }}>
@@ -865,7 +1041,12 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
                         const s = DIM_BY_ID[pl.senso] || SENSOS[0];
                         const done = pl.status === 'concluida';
                         return (
-                            <div key={pl.id} style={{ background: 'var(--bg-surface-glass)', border: `1px solid ${done ? '#16A34A44' : 'var(--border-color-dark)'}`, borderLeft: `4px solid ${s.cor}`, borderRadius: 10, padding: '0.65rem 0.8rem', marginBottom: '0.5rem', opacity: done ? 0.75 : 1, display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'auto 2fr 1fr 0.9fr auto auto', gap: '0.5rem', alignItems: 'end' }}>
+                            <div key={pl.id} style={{ background: pl.origem && !done ? 'rgba(220,38,38,0.07)' : 'var(--bg-surface-glass)', border: `1px solid ${done ? '#16A34A44' : pl.origem ? '#DC262655' : 'var(--border-color-dark)'}`, borderLeft: `4px solid ${s.cor}`, borderRadius: 10, padding: '0.65rem 0.8rem', marginBottom: '0.5rem', opacity: done ? 0.75 : 1, display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'auto 2fr 1fr 0.9fr auto auto', gap: '0.5rem', alignItems: 'end' }}>
+                                {pl.origem && (
+                                    <div style={{ gridColumn: '1 / -1', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '0.5px', color: done ? '#16A34A' : '#F87171' }}>
+                                        RENOVADA · {Number(pl.vez) || 2}ª VEZ · PENDENTE DESDE {fmtData(pl.origem.data)}{pl.origem.prazo ? ` · PRAZO ORIGINAL ${fmtData(pl.origem.prazo)}` : ''}
+                                    </div>
+                                )}
                                 <div><label style={labelSty}>Pilar</label>
                                     <select style={{ ...inputSty, padding: '0.35rem 0.5rem' }} value={pl.senso} onChange={e => setPlanos(p => p.map(x => x.id === pl.id ? { ...x, senso: e.target.value } : x))}>
                                         <optgroup label="5S">{SENSOS.map(x => <option key={x.id} value={x.id}>{x.num}</option>)}</optgroup>
@@ -882,8 +1063,6 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
                     })}
                 </div>
 
-                {/* Demonstrativo da nota — abre a conta inteira até o Índice Solar */}
-                <DemonstrativoNota respostas={respostas} isMobile={isMobile} />
             </div>
 
             {/* Rodapé */}
@@ -892,7 +1071,7 @@ const Auditoria5S = ({ aud, onClose, onSave, saving }) => {
                     {respondidos === totalItens ? <span style={{ color: '#16A34A', fontWeight: 700 }}>✓ Tudo avaliado · 5S {sc.geral}% · SOL {scSol.geral}%</span> : <span>Faltam {totalItens - respondidos} critérios</span>}
                     <SolSeloPill value={solar} />
                 </div>
-                <button onClick={() => abrirRelatorio(montarRelatorio5S({ ...aud, respostas, observacoes, fotos, planos, score: sc.geral, scores: scoresIntegrado(respostas) }, aud.auditor || 'Sistema'))}
+                <button onClick={() => abrirRelatorio(montarRelatorio5S({ ...aud, respostas, observacoes, fotos, planos, score: sc.geral, scores: scoresIntegrado(respostas) }, historico))}
                     style={{ ...btnSec, flex: isMobile ? 1 : 'none', justifyContent: 'center', padding: '0.62rem 1rem' }} title="Gerar relatório analítico (imprimir/PDF)">
                     <FaFilePdf size={11} color="#DC2626" /> Relatório
                 </button>
@@ -957,22 +1136,25 @@ export default function Gestao5SView() {
     const toggleSetor = (k) => setOpenSetores(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
     const [collapsedAud, setCollapsedAud] = useState(() => new Set()); // setores recolhidos na aba Auditorias (abertos por padrão)
     const toggleAud = (k) => setCollapsedAud(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
-    const [fabricaInd, setFabricaInd] = useState('todas'); // filtro de fábrica em Indicadores
-    const [statusInd, setStatusInd] = useState('todas'); // todas | auditadas | excelencia | atencao | sem_auditoria
-    const [buscaInd, setBuscaInd] = useState('');
-    const [ordemInd, setOrdemInd] = useState('pior'); // pior | melhor | recente | nome
     const [relViewer, abrirRelatorio] = useRelatorioViewer();
     const [buscaSetorRank, setBuscaSetorRank] = useState('');
+    // Auditorias marcadas na aba Auditorias para o comparativo de evolução
+    const [selecao, setSelecao] = useState(() => new Set());
+    const [showEvolucao, setShowEvolucao] = useState(false);
+    const toggleSelecao = (id) => setSelecao(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
     const showMsg = (text, type = 'success') => { setMsg({ text, type }); setTimeout(() => setMsg(null), 2800); };
 
     const load = useCallback(async () => {
         setLoading(true);
-        const [{ data: auds }, { data: est }] = await Promise.all([
+        const [{ data: auds }, estRes] = await Promise.all([
             supabase.from('cinco_s_auditoria').select('*').order('updated_at', { ascending: false }),
-            supabase.from('cadastro_planta_area').select('planta, fabrica, setor, maquina'),
+            supabase.from('cadastro_planta_area').select('id, planta, fabrica, setor, maquina, tipo, linha_id'),
         ]);
-        
+        // Banco sem as colunas de linha (schema.sql ainda não rodado): lê o básico.
+        let est = estRes.data;
+        if (estRes.error) ({ data: est } = await supabase.from('cadastro_planta_area').select('id, planta, fabrica, setor, maquina'));
+
         const audsTratadas = (auds || []).map(tratarAuditoria);
         
         setAuditorias(audsTratadas);
@@ -1084,6 +1266,8 @@ export default function Gestao5SView() {
     });
     estrutura.forEach(e => {
         if (!e.fabrica || !e.setor) return;
+        // Máquina que compõe uma linha é auditada dentro da linha, não sozinha
+        if (emLinha(estrutura, e)) return;
         const setorK = `${norm(e.planta)}|${norm(e.fabrica)}|${norm(e.setor)}`;
         // pula a linha "setor sem máquina" quando o setor possui máquinas cadastradas
         if (!e.maquina && setorTemMaquina.has(setorK)) return;
@@ -1161,10 +1345,23 @@ export default function Gestao5SView() {
         })).sort((a, b) => ts(b.itens[0]) - ts(a.itens[0]));
     })();
 
+    // ── Comparativo de evolução: auditorias marcadas nos cards ───────────────
+    const audsSelecionadas = auditorias.filter(a => selecao.has(a.id));
+    // Com uma só marcada, o atalho traz o histórico inteiro daquela linha/máquina
+    // — que é a comparação que quase sempre se quer fazer.
+    const irmasDaSelecionada = audsSelecionadas.length === 1
+        ? auditoriasFiltradas.filter(a => areaKey(a) === areaKey(audsSelecionadas[0]) && !selecao.has(a.id))
+        : [];
+
     // ── Indicadores ──────────────────────────────────────────────────────────────
     const auditadas = mapa.filter(m => m.ult);
     const mediaGeral = auditadas.length ? Math.round(auditadas.reduce((s, m) => s + (m.ult.score || 0), 0) / auditadas.length) : null;
     const acoesAbertasTot = auditoriasFiltradas.reduce((s, a) => s + (a.planos || []).filter(p => p.status !== 'concluida').length, 0);
+    // Rotina semanal: conta todas as auditorias concluídas, independente do filtro de período
+    const semanas = indexarSemanas(auditorias);
+    const semanaAgora = semanaAtualKey();
+    const pendenteSemana = (m) => !semanas.get(areaKey(m))?.has(semanaAgora);
+    const pendentesSemana = mapa.filter(pendenteSemana).length;
     const radarMedio = (() => {
         const out = {};
         SENSOS.forEach(s => {
@@ -1187,68 +1384,6 @@ export default function Gestao5SView() {
     // Mural do Sol: áreas que "viram o sol nascer" (índice solar ≥ FAIXA_EXCELENCIA), ranqueadas
     const muralSol = auditadas.filter(m => (solarDe(m.ult) ?? 0) >= FAIXA_EXCELENCIA).sort((a, b) => (solarDe(b.ult) - solarDe(a.ult)));
 
-    // ── Diagnóstico estruturado por Fábrica (Fábrica 1, 2, 3...) em Indicadores ──
-    const fabricasLista = (() => {
-        const set = new Set();
-        areasCadastro.forEach(a => { if (a.fabrica) set.add(a.fabrica.trim()); });
-        auditorias.forEach(a => { if (a.fabrica) set.add(a.fabrica.trim()); });
-        if (set.size === 0) {
-            ['FÁBRICA 1', 'FÁBRICA 2', 'FÁBRICA 3'].forEach(f => set.add(f));
-        }
-        return [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-    })();
-
-    const metricasFabricaSel = (() => {
-        const base = mapa.filter(m => fabricaInd === 'todas' || norm(m.fabrica) === norm(fabricaInd));
-        const auditadasF = base.filter(m => m.ult);
-        const solarM = auditadasF.length ? Math.round(auditadasF.reduce((s, m) => s + (solarDe(m.ult) || 0), 0) / auditadasF.length) : null;
-        const s5M = auditadasF.length ? Math.round(auditadasF.reduce((s, m) => s + (m.ult.score || 0), 0) / auditadasF.length) : null;
-        const solM = auditadasF.length ? Math.round(auditadasF.reduce((s, m) => s + (m.ult.scores?.sol_geral || 0), 0) / auditadasF.length) : null;
-        const acoes = base.reduce((s, m) => s + (m.acoesAbertas || 0), 0);
-        const cob = Math.round((auditadasF.length / (base.length || 1)) * 100);
-        return {
-            total: base.length,
-            auditadas: auditadasF.length,
-            solarM,
-            s5M,
-            solM,
-            acoes,
-            cob,
-        };
-    })();
-
-    const areasFabricaFiltradas = (() => {
-        return mapa.filter(m => {
-            if (fabricaInd !== 'todas' && norm(m.fabrica) !== norm(fabricaInd)) return false;
-            
-            if (buscaInd.trim()) {
-                const q = norm(buscaInd);
-                const str = `${norm(m.fabrica)} ${norm(m.setor)} ${norm(m.maquina)}`;
-                if (!str.includes(q)) return false;
-            }
-
-            const score = m.ult ? solarDe(m.ult) : null;
-            if (statusInd === 'auditadas' && !m.ult) return false;
-            if (statusInd === 'excelencia' && (score == null || score < FAIXA_EXCELENCIA)) return false;
-            if (statusInd === 'atencao' && (score == null || score >= FAIXA_CONSOLIDA)) return false;
-            if (statusInd === 'sem_auditoria' && m.ult) return false;
-
-            return true;
-        }).sort((a, b) => {
-            const scA = a.ult ? solarDe(a.ult) : -1;
-            const scB = b.ult ? solarDe(b.ult) : -1;
-            if (ordemInd === 'pior') return scA - scB;
-            if (ordemInd === 'melhor') return scB - scA;
-            if (ordemInd === 'nome') return `${a.fabrica} ${a.setor} ${a.maquina || ''}`.localeCompare(`${b.fabrica} ${b.setor} ${b.maquina || ''}`);
-            if (ordemInd === 'recente') {
-                const da = new Date(a.ult?.data_auditoria || a.ult?.created_at || 0).getTime();
-                const db = new Date(b.ult?.data_auditoria || b.ult?.created_at || 0).getTime();
-                return db - da;
-            }
-            return 0;
-        });
-    })();
-
     // Quem mais audita — ranking por auditorias concluídas
     const porAuditor = {};
     concluidas.forEach(a => { const nome = (a.auditor || '').trim() || '—'; porAuditor[nome] = (porAuditor[nome] || 0) + 1; });
@@ -1257,7 +1392,7 @@ export default function Gestao5SView() {
     const gerarRelatorioGeral = () => {
         const nowStr = new Date().toLocaleDateString('pt-BR');
         const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const scCorHex = (s) => s == null ? '#94a3b8' : s >= FAIXA_EXCELENCIA ? '#16a34a' : s >= FAIXA_CONSOLIDA ? '#d97706' : '#dc2626';
+        const scCorHex = (s) => tinta(s == null ? '#475569' : s >= FAIXA_EXCELENCIA ? '#16a34a' : s >= FAIXA_CONSOLIDA ? '#d97706' : '#dc2626');
 
         const rankingHtml = [...mapaSetores].filter(s => s.mediaSolar != null).sort((a, b) => b.mediaSolar - a.mediaSolar).map((s, i) => `
             <tr>
@@ -1269,7 +1404,7 @@ export default function Gestao5SView() {
 
         const muralHtml = muralSol.map((m, i) => `
             <div style="display:inline-block;margin:4px;padding:6px 10px;border-radius:6px;background:#fffbeb;border:1px solid #fde68a;font-size:11px;font-weight:700;color:#92400e">
-                ${i === 0 ? '🏆' : '☀️'} ${esc(areaLabel(m))} (${solarDe(m.ult)}%)
+                ${esc(areaLabel(m))} (${solarDe(m.ult)}%)
             </div>
         `).join('');
 
@@ -1283,49 +1418,49 @@ export default function Gestao5SView() {
         <button class="no-print" onclick="window.print()" style="position:fixed;top:16px;right:16px;background:#16a34a;color:#fff;border:none;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:13px;font-weight:800;box-shadow:0 4px 14px rgba(22,163,74,.4)">🖨️ Imprimir / Salvar PDF</button>
         <div style="max-width:900px;margin:24px auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 10px 25px rgba(0,0,0,.1)">
             <div style="background:linear-gradient(120deg,#0d2818 55%,#7c2d12);padding:20px 30px;color:#fff;">
-                <h1 style="margin:0;font-size:20px;font-weight:900">📊 Relatório Geral 5S <span style="color:#fbbf24">☀️ SOL</span></h1>
+                <h1 style="margin:0;font-size:20px;font-weight:900">Relatório Geral 5S <span style="color:#fbbf24">+ SOL</span></h1>
                 <p style="margin:3px 0 0;color:#fcd34d;font-size:10px;text-transform:uppercase;">Visão Global do Parque · Emitido em ${nowStr}</p>
             </div>
             <div style="padding:22px 30px">
                 <div style="display:flex;gap:10px;margin-bottom:20px">
                     <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center">
                         <div style="font-size:24px;font-weight:900;color:${scCorHex(solarMedio)}">${solarMedio != null ? solarMedio + '%' : '—'}</div>
-                        <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Índice Solar Médio</div>
+                        <div style="font-size:10px;color:#475569;text-transform:uppercase;font-weight:700">Índice Solar Médio</div>
                     </div>
                     <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center">
                         <div style="font-size:24px;font-weight:900;color:${scCorHex(mediaGeral)}">${mediaGeral != null ? mediaGeral + '%' : '—'}</div>
-                        <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Score 5S Médio</div>
+                        <div style="font-size:10px;color:#475569;text-transform:uppercase;font-weight:700">Score 5S Médio</div>
                     </div>
                     <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center">
-                        <div style="font-size:24px;font-weight:900;color:#3B82F6">${auditadas.length}/${areasCadastro.length}</div>
-                        <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Áreas Auditadas</div>
+                        <div style="font-size:24px;font-weight:900;color:${tinta('#3B82F6')}">${auditadas.length}/${areasCadastro.length}</div>
+                        <div style="font-size:10px;color:#475569;text-transform:uppercase;font-weight:700">Áreas Auditadas</div>
                     </div>
                     <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center">
-                        <div style="font-size:24px;font-weight:900;color:${acoesAbertasTot ? '#d97706' : '#16a34a'}">${acoesAbertasTot}</div>
-                        <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Ações Abertas</div>
+                        <div style="font-size:24px;font-weight:900;color:${tinta(acoesAbertasTot ? '#d97706' : '#16a34a')}">${acoesAbertasTot}</div>
+                        <div style="font-size:10px;color:#475569;text-transform:uppercase;font-weight:700">Ações Abertas</div>
                     </div>
                 </div>
 
-                <h2 style="font-size:14px;color:#0f172a;border-bottom:2px solid #22c55e;padding-bottom:5px;margin-bottom:10px">🏆 Mural do Sol (Áreas ≥ ${FAIXA_EXCELENCIA}%)</h2>
-                <div style="margin-bottom:20px">${muralHtml || '<span style="font-size:12px;color:#64748b">Nenhuma área no Mural do Sol ainda.</span>'}</div>
+                <h2 style="font-size:14px;color:#0f172a;border-bottom:2px solid #22c55e;padding-bottom:5px;margin-bottom:10px">Mural do Sol (Áreas ≥ ${FAIXA_EXCELENCIA}%)</h2>
+                <div style="margin-bottom:20px">${muralHtml || '<span style="font-size:12px;color:#475569">Nenhuma área no Mural do Sol ainda.</span>'}</div>
 
-                <h2 style="font-size:14px;color:#0f172a;border-bottom:2px solid #22c55e;padding-bottom:5px;margin-bottom:10px">📈 Ranking dos Setores</h2>
+                <h2 style="font-size:14px;color:#0f172a;border-bottom:2px solid #22c55e;padding-bottom:5px;margin-bottom:10px">Ranking dos Setores</h2>
                 <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
                     <tr style="background:#f1f5f9">
-                        <th style="padding:6px 10px;font-size:10px;color:#64748b;text-align:left">Posição</th>
-                        <th style="padding:6px 10px;font-size:10px;color:#64748b;text-align:left">Setor</th>
-                        <th style="padding:6px 10px;font-size:10px;color:#64748b;text-align:right">Índice Solar</th>
+                        <th style="padding:6px 10px;font-size:10px;color:#475569;text-align:left">Posição</th>
+                        <th style="padding:6px 10px;font-size:10px;color:#475569;text-align:left">Setor</th>
+                        <th style="padding:6px 10px;font-size:10px;color:#475569;text-align:right">Índice Solar</th>
                     </tr>
-                    ${rankingHtml || '<tr><td colspan="3" style="padding:10px;text-align:center;font-size:12px;color:#64748b">Nenhum setor avaliado</td></tr>'}
+                    ${rankingHtml || '<tr><td colspan="3" style="padding:10px;text-align:center;font-size:12px;color:#475569">Nenhum setor avaliado</td></tr>'}
                 </table>
-                <div style="margin-top:28px;padding-top:12px;border-top:1px solid #e2e8f0;text-align:center;color:#94a3b8;font-size:10px;font-weight:700">Documento gerado automaticamente · ${nowStr}</div>
+                <div style="margin-top:28px;padding-top:12px;border-top:1px solid #e2e8f0;text-align:center;color:#475569;font-size:10px;font-weight:700">Documento gerado automaticamente · ${nowStr}</div>
             </div>
         </div></body></html>`;
 
         abrirRelatorio({ html, nomeArquivo: `Relatorio_Geral_5S_${nowStr.replace(/\//g, '-')}.html` });
     };
 
-    if (sel) return <Auditoria5S aud={sel} onClose={() => setSel(null)} onSave={saveAuditoria} saving={saving} />;
+    if (sel) return <Auditoria5S aud={sel} historico={historicoDaMaquina(sel, auditorias)} onClose={() => setSel(null)} onSave={saveAuditoria} saving={saving} />;
 
     return (
         <div style={{ padding: isMobile ? '0.8rem' : '1rem 1.25rem', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: '0.7rem' }}>
@@ -1351,13 +1486,16 @@ export default function Gestao5SView() {
                 <KpiMini icon={<FaSun />} label="Índice Solar do parque" value={solarMedio != null ? `${solarMedio}%` : '—'} cor={scoreCor(solarMedio)} />
                 <KpiMini icon={<FaChartPie />} label="Score 5S médio" value={mediaGeral != null ? `${mediaGeral}%` : '—'} cor={scoreCor(mediaGeral)} />
                 <KpiMini icon={<FaMapMarkedAlt />} label="Áreas auditadas" value={`${auditadas.length}/${areasCadastro.length}`} cor="#3B82F6" />
+                <div onClick={() => setTab('semana')} style={{ cursor: 'pointer', display: 'contents' }}>
+                    <KpiMini icon={<FaCalendarAlt />} label="Pendentes nesta semana" value={`${pendentesSemana}/${mapa.length}`} cor={pendentesSemana ? '#DC2626' : '#16A34A'} />
+                </div>
                 <KpiMini icon={<FaExclamationTriangle />} label="Ações abertas" value={acoesAbertasTot} cor={acoesAbertasTot ? '#D97706' : '#16A34A'} />
                 <KpiMini icon={<FaCheckCircle />} label={periodo === 'tudo' ? 'Auditorias concluídas' : 'Auditorias no período'} value={concluidas.length} cor={ACCENT} />
             </div>
 
             {/* Tabs + filtro de período — grudam no topo ao rolar (sticky) */}
             <div style={{ position: 'sticky', top: 0, zIndex: 5, flexShrink: 0, display: 'flex', alignItems: 'center', gap: '0.3rem', borderBottom: '1px solid var(--border-color-dark)', overflowX: 'auto', background: 'var(--bg-app)', paddingTop: '0.3rem' }}>
-                {[['mapa', 'Mapa das Áreas', <FaMapMarkedAlt size={11} />], ['auditorias', 'Auditorias', <FaListUl size={11} />], ['indicadores', 'Indicadores', <FaChartPie size={11} />]].map(([id, label, icon]) => (
+                {[['mapa', 'Mapa das Áreas', <FaMapMarkedAlt size={11} />], ['semana', `Rotina semanal${pendentesSemana ? ` (${pendentesSemana})` : ''}`, <FaCalendarAlt size={11} />], ['auditorias', 'Auditorias', <FaListUl size={11} />], ['indicadores', 'Indicadores', <FaChartPie size={11} />]].map(([id, label, icon]) => (
                     <button key={id} onClick={() => setTab(id)} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.55rem 1rem', border: 'none', borderBottom: `2px solid ${tab === id ? ACCENT : 'transparent'}`, background: 'transparent', color: tab === id ? ACCENT : 'var(--color-text-muted)', fontSize: '0.78rem', fontWeight: tab === id ? 800 : 600, cursor: 'pointer', marginBottom: -1, whiteSpace: 'nowrap' }}>
                         {icon} {label}
                     </button>
@@ -1421,6 +1559,7 @@ export default function Gestao5SView() {
                                             <span style={{ fontSize: '0.82rem', fontWeight: 900, color: 'var(--color-text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{grp.fabrica} · {grp.setor}</span>
                                             <span style={{ fontSize: '0.6rem', color: 'var(--color-text-subtle)', fontWeight: 700, flexShrink: 0 }}>{grp.planta}</span>
                                             <div style={{ flex: 1 }} />
+                                            {(() => { const pend = grp.itens.filter(pendenteSemana).length; return pend > 0 && <span style={{ fontSize: '0.6rem', fontWeight: 800, color: '#DC2626', flexShrink: 0 }}>{pend} pendente(s) na semana</span>; })()}
                                             {grp.acoes > 0 && <span style={{ fontSize: '0.6rem', fontWeight: 800, color: '#D97706', flexShrink: 0 }}>{grp.acoes} ação(ões)</span>}
                                             <span style={{ fontSize: '0.6rem', fontWeight: 800, color: 'var(--color-text-muted)', background: 'var(--bg-surface-glass)', border: '1px solid var(--border-color-dark)', borderRadius: 20, padding: '0.1rem 0.55rem', flexShrink: 0 }}>{grp.auditadas}/{grp.itens.length}</span>
                                             {/* % geral do setor */}
@@ -1448,12 +1587,12 @@ export default function Gestao5SView() {
                                                         </div>
                                                     )}
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginTop: '0.45rem', fontSize: '0.63rem', color: 'var(--color-text-muted)', flexWrap: 'wrap' }}>
+                                                        {pendenteSemana(m)
+                                                            ? <span style={{ color: '#DC2626', fontWeight: 800 }}>⚠️ Pendente nesta semana</span>
+                                                            : <span style={{ color: '#16A34A', fontWeight: 800 }}>✓ Avaliada nesta semana</span>}
                                                         {m.ult ? (() => {
-                                                            const diasAtraso = Math.round((Date.now() - new Date(String(m.ult.data_auditoria).slice(0, 10) + 'T12:00:00')) / 86400000);
-                                                            const atrasada = diasAtraso > 30;
                                                             return <>
                                                                 <span>Última: {fmtData(m.ult.data_auditoria)}</span>
-                                                                {atrasada && <span style={{ color: '#DC2626', fontWeight: 800 }}>⚠️ +30 dias</span>}
                                                                 {m.delta != null && <span style={{ fontWeight: 800, color: m.delta >= 0 ? '#16A34A' : '#DC2626' }}>{m.delta >= 0 ? '▲' : '▼'} {Math.abs(m.delta)} pts</span>}
                                                                 {m.acoesAbertas > 0 && <span style={{ color: '#D97706', fontWeight: 700 }}>{m.acoesAbertas} ação(ões)</span>}
                                                             </>;
@@ -1473,6 +1612,13 @@ export default function Gestao5SView() {
                         )
                 )}
 
+                {/* ── ROTINA SEMANAL ── */}
+                {tab === 'semana' && (
+                    loading ? <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>Carregando…</div>
+                        : <RotinaSemanal mapa={mapa} semanas={semanas} isMobile={isMobile} onAbrir={setSel}
+                            onAuditar={m => { setNovaPrefill({ planta: m.planta, fabrica: m.fabrica, setor: m.setor, maquina: m.maquina }); setShowNova(true); }} />
+                )}
+
                 {/* ── AUDITORIAS ── */}
                 {tab === 'auditorias' && (
                     auditoriasFiltradas.length === 0 ? (
@@ -1483,6 +1629,30 @@ export default function Gestao5SView() {
                         </div>
                     ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+                            {/* Barra de comparação: marca relatórios e abre a evolução */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', background: audsSelecionadas.length ? `${SOL_ACCENT}12` : 'var(--bg-surface-glass)', border: `1px solid ${audsSelecionadas.length ? `${SOL_ACCENT}55` : 'var(--border-color-dark)'}`, borderRadius: 10, padding: '0.45rem 0.7rem' }}>
+                                <FaChartLine size={12} color={audsSelecionadas.length ? SOL_ACCENT : 'var(--color-text-subtle)'} style={{ flexShrink: 0 }} />
+                                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: audsSelecionadas.length ? 'var(--color-text-main)' : 'var(--color-text-muted)' }}>
+                                    {audsSelecionadas.length === 0
+                                        ? 'Marque 2 ou mais auditorias nos cards para ver a evolução entre elas'
+                                        : `${audsSelecionadas.length} auditoria(s) marcada(s)`}
+                                </span>
+                                {irmasDaSelecionada.length > 0 && (
+                                    <button onClick={() => setSelecao(prev => { const n = new Set(prev); irmasDaSelecionada.forEach(a => n.add(a.id)); return n; })}
+                                        style={{ ...btnSec, fontSize: '0.66rem', padding: '0.25rem 0.6rem', borderColor: `${ACCENT}55`, color: ACCENT }}>
+                                        + as {irmasDaSelecionada.length} desta linha/máquina
+                                    </button>
+                                )}
+                                {audsSelecionadas.length > 0 && (
+                                    <button onClick={() => setSelecao(new Set())} style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', fontSize: '0.66rem', fontWeight: 700, padding: 0 }}>limpar</button>
+                                )}
+                                <div style={{ flex: 1, minWidth: 8 }} />
+                                <button onClick={() => setShowEvolucao(true)} disabled={audsSelecionadas.length < 2}
+                                    title={audsSelecionadas.length < 2 ? 'Marque pelo menos duas auditorias' : 'Ver evolução e retrocesso entre as marcadas'}
+                                    style={{ ...btnPrim, fontSize: '0.72rem', padding: '0.42rem 0.9rem', background: SOL_ACCENT, color: '#3B1D00', opacity: audsSelecionadas.length < 2 ? 0.45 : 1, cursor: audsSelecionadas.length < 2 ? 'default' : 'pointer' }}>
+                                    <FaSun size={11} /> Ver evolução
+                                </button>
+                            </div>
                             {/* Ação global: expandir / recolher todos os setores */}
                             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                                 <button onClick={() => setCollapsedAud(collapsedAud.size === 0 ? new Set(audsPorSetor.map(g => `${g.planta}|${g.fabrica}|${g.setor}`)) : new Set())}
@@ -1507,29 +1677,37 @@ export default function Gestao5SView() {
                                     {/* Cards das auditorias do setor */}
                                     {aberto && (
                                     <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? '100%' : '280px'}, 1fr))`, gap: '0.7rem', padding: '0 0.9rem 0.9rem' }}>
-                                        {grp.itens.map(a => (
-                                            <div key={a.id} className="glass-panel s5-card" onClick={() => setSel(a)} style={{ borderRadius: 11, border: '1px solid var(--border-color-dark)', padding: '0.85rem', cursor: 'pointer', position: 'relative', transition: 'transform 0.15s' }}
+                                        {grp.itens.map(a => { const sc = scoresDaAuditoria(a); const marcada = selecao.has(a.id); return (
+                                            <div key={a.id} className="glass-panel s5-card" onClick={() => setSel(a)} style={{ borderRadius: 11, border: `1px solid ${marcada ? `${SOL_ACCENT}88` : 'var(--border-color-dark)'}`, background: marcada ? `${SOL_ACCENT}0f` : undefined, padding: '0.85rem', cursor: 'pointer', position: 'relative', transition: 'transform 0.15s' }}
                                                 onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-3px)'} onMouseLeave={e => e.currentTarget.style.transform = 'none'}>
-                                                <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4 }}>
-                                                    <button className="s5-del" onClick={e => { e.stopPropagation(); abrirRelatorio(montarRelatorio5S(a, a.auditor || 'Sistema')); }} title="Relatório analítico"
+                                                <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, alignItems: 'center' }}>
+                                                    <button onClick={e => { e.stopPropagation(); toggleSelecao(a.id); }} title={marcada ? 'Tirar do comparativo de evolução' : 'Marcar para comparar a evolução'}
+                                                        style={{ width: 22, height: 22, borderRadius: 6, background: marcada ? SOL_ACCENT : 'transparent', border: `1.5px solid ${marcada ? SOL_ACCENT : 'var(--border-color-dark)'}`, color: '#3B1D00', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
+                                                        {marcada && <FaCheck size={10} />}
+                                                    </button>
+                                                    <button className="s5-del" onClick={e => { e.stopPropagation(); abrirRelatorio(montarRelatorio5S(a, historicoDaMaquina(a, auditorias))); }} title="Relatório analítico"
                                                         style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(59,130,246,0.18)', border: 'none', color: '#3B82F6', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.15s' }}><FaFilePdf size={10} /></button>
                                                     <button className="s5-del" onClick={e => { e.stopPropagation(); setConfirmDel(a); }} style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(220,38,38,0.15)', border: 'none', color: '#DC2626', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.15s' }}><FaTimes size={10} /></button>
                                                 </div>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', paddingRight: 52 }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', paddingRight: 80 }}>
                                                     <span style={{ fontSize: '0.58rem', fontWeight: 800, padding: '0.15rem 0.5rem', borderRadius: 5, textTransform: 'uppercase', background: a.status === 'concluida' ? '#16A34A22' : '#D9770622', color: a.status === 'concluida' ? '#16A34A' : '#D97706' }}>{a.status === 'concluida' ? 'Concluída' : 'Aberta'}</span>
                                                     <span style={{ fontSize: '0.62rem', color: 'var(--color-text-subtle)' }}>{fmtData(a.data_auditoria)}</span>
                                                     {a.maquina && <span style={{ fontSize: '0.58rem', fontWeight: 800, color: ACCENT, background: `${ACCENT}18`, borderRadius: 5, padding: '0.1rem 0.45rem' }}>{a.maquina}</span>}
                                                 </div>
                                                 <div style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--color-text-main)', marginTop: '0.5rem', lineHeight: 1.3 }}>{a.titulo}</div>
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.9rem', marginTop: '0.6rem' }}>
-                                                    <RingGauge value={a.score != null ? Math.round(a.score) : null} size={46} stroke={5} />
+                                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.15rem', flexShrink: 0 }}>
+                                                        <RingGauge value={sc.solar} size={46} stroke={5} />
+                                                        <span style={{ fontSize: '0.5rem', fontWeight: 800, letterSpacing: '0.4px', textTransform: 'uppercase', color: 'var(--color-text-subtle)' }}>Índice Solar</span>
+                                                    </div>
                                                     <div style={{ flex: 1, fontSize: '0.66rem', color: 'var(--color-text-muted)', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
                                                         <span>Auditor: <b style={{ color: 'var(--color-text-main)' }}>{a.auditor || '—'}</b></span>
+                                                        <span>5S <b style={{ color: scoreCor(sc.g5) }}>{sc.g5 != null ? `${sc.g5}%` : '—'}</b> · SOL <b style={{ color: scoreCor(sc.gSol) }}>{sc.gSol != null ? `${sc.gSol}%` : '—'}</b></span>
                                                         <span>{(a.planos || []).filter(p => p.status !== 'concluida').length} ação(ões) aberta(s)</span>
                                                     </div>
                                                 </div>
                                             </div>
-                                        ))}
+                                        );})}
                                     </div>
                                     )}
                                 </div>
@@ -1541,280 +1719,6 @@ export default function Gestao5SView() {
                 {/* ── INDICADORES ── */}
                 {tab === 'indicadores' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
-
-                        {/* ══════════════════════════════════════════════════════════════════════════════════
-                            1. SEÇÃO DE DIAGNÓSTICO POR FÁBRICA (FÁBRICA 1, 2, 3 E TODAS) COM FILTROS
-                        ══════════════════════════════════════════════════════════════════════════════════ */}
-                        <div className="glass-panel" style={{ borderRadius: 16, border: '1px solid var(--border-color-dark)', padding: '1.2rem', background: 'linear-gradient(145deg, rgba(34,197,94,0.04), transparent 50%), var(--bg-surface-glass)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.8rem', marginBottom: '1rem' }}>
-                                <div>
-                                    <div style={{ fontSize: '0.98rem', fontWeight: 900, color: 'var(--color-text-main)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                        <FaIndustry color={ACCENT} size={15} /> Diagnóstico por Fábrica & Áreas
-                                    </div>
-                                    <div style={{ fontSize: '0.68rem', color: 'var(--color-text-muted)', marginTop: 2 }}>
-                                        Visão aprofundada de desempenho, cobertura e planos de ação por planta fabril
-                                    </div>
-                                </div>
-                                
-                                {/* Seletor de Fábrica */}
-                                <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-                                    <button
-                                        type="button"
-                                        onClick={() => setFabricaInd('todas')}
-                                        style={{
-                                            padding: '0.4rem 0.85rem',
-                                            borderRadius: 9,
-                                            border: `1.5px solid ${fabricaInd === 'todas' ? ACCENT : 'var(--border-color-dark)'}`,
-                                            background: fabricaInd === 'todas' ? `${ACCENT}22` : 'transparent',
-                                            color: fabricaInd === 'todas' ? ACCENT : 'var(--color-text-muted)',
-                                            fontSize: '0.74rem',
-                                            fontWeight: 800,
-                                            cursor: 'pointer',
-                                            transition: 'all 0.15s'
-                                        }}
-                                    >
-                                        🌐 Todas as Fábricas ({mapa.length})
-                                    </button>
-                                    {fabricasLista.map(f => {
-                                        const countF = mapa.filter(m => norm(m.fabrica) === norm(f)).length;
-                                        const isSel = norm(fabricaInd) === norm(f);
-                                        return (
-                                            <button
-                                                key={f}
-                                                type="button"
-                                                onClick={() => setFabricaInd(f)}
-                                                style={{
-                                                    padding: '0.4rem 0.85rem',
-                                                    borderRadius: 9,
-                                                    border: `1.5px solid ${isSel ? ACCENT : 'var(--border-color-dark)'}`,
-                                                    background: isSel ? `${ACCENT}22` : 'transparent',
-                                                    color: isSel ? ACCENT : 'var(--color-text-muted)',
-                                                    fontSize: '0.74rem',
-                                                    fontWeight: 800,
-                                                    cursor: 'pointer',
-                                                    transition: 'all 0.15s'
-                                                }}
-                                            >
-                                                🏭 {f} ({countF})
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-
-                            {/* Resumo Executivo da Fábrica Selecionada */}
-                            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.7rem', marginBottom: '1.1rem' }}>
-                                <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border-color-dark)', borderRadius: 12, padding: '0.75rem 0.9rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                    <div style={{ width: 38, height: 38, borderRadius: 10, background: `${solSelo(metricasFabricaSel.solarM).cor}22`, color: solSelo(metricasFabricaSel.solarM).cor, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '1.2rem' }}>
-                                        {solSelo(metricasFabricaSel.solarM).emoji}
-                                    </div>
-                                    <div>
-                                        <div style={{ fontSize: '1.15rem', fontWeight: 900, color: scoreCor(metricasFabricaSel.solarM), lineHeight: 1 }}>{metricasFabricaSel.solarM != null ? `${metricasFabricaSel.solarM}%` : '—'}</div>
-                                        <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', fontWeight: 700, textTransform: 'uppercase', marginTop: 3 }}>Índice Solar Fábrica</div>
-                                    </div>
-                                </div>
-
-                                <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border-color-dark)', borderRadius: 12, padding: '0.75rem 0.9rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                    <div style={{ width: 38, height: 38, borderRadius: 10, background: `${ACCENT}22`, color: ACCENT, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                        <FaBroom size={16} />
-                                    </div>
-                                    <div>
-                                        <div style={{ fontSize: '1.15rem', fontWeight: 900, color: scoreCor(metricasFabricaSel.s5M), lineHeight: 1 }}>{metricasFabricaSel.s5M != null ? `${metricasFabricaSel.s5M}%` : '—'}</div>
-                                        <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', fontWeight: 700, textTransform: 'uppercase', marginTop: 3 }}>Score 5S Médio</div>
-                                    </div>
-                                </div>
-
-                                <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border-color-dark)', borderRadius: 12, padding: '0.75rem 0.9rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                    <div style={{ width: 38, height: 38, borderRadius: 10, background: `${SOL_ACCENT}22`, color: SOL_ACCENT, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                        <FaSun size={16} />
-                                    </div>
-                                    <div>
-                                        <div style={{ fontSize: '1.15rem', fontWeight: 900, color: scoreCor(metricasFabricaSel.solM), lineHeight: 1 }}>{metricasFabricaSel.solM != null ? `${metricasFabricaSel.solM}%` : '—'}</div>
-                                        <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', fontWeight: 700, textTransform: 'uppercase', marginTop: 3 }}>Score SOL Médio</div>
-                                    </div>
-                                </div>
-
-                                <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border-color-dark)', borderRadius: 12, padding: '0.75rem 0.9rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                    <div style={{ width: 38, height: 38, borderRadius: 10, background: '#3B82F622', color: '#60A5FA', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                        <FaMapMarkedAlt size={16} />
-                                    </div>
-                                    <div>
-                                        <div style={{ fontSize: '1.15rem', fontWeight: 900, color: '#60A5FA', lineHeight: 1 }}>{metricasFabricaSel.auditadas}/{metricasFabricaSel.total}</div>
-                                        <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', fontWeight: 700, textTransform: 'uppercase', marginTop: 3 }}>Cobertura ({metricasFabricaSel.cob}%)</div>
-                                    </div>
-                                </div>
-
-                                <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border-color-dark)', borderRadius: 12, padding: '0.75rem 0.9rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                    <div style={{ width: 38, height: 38, borderRadius: 10, background: metricasFabricaSel.acoes > 0 ? '#D9770622' : '#16A34A22', color: metricasFabricaSel.acoes > 0 ? '#D97706' : '#16A34A', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                        <FaBolt size={16} />
-                                    </div>
-                                    <div>
-                                        <div style={{ fontSize: '1.15rem', fontWeight: 900, color: metricasFabricaSel.acoes > 0 ? '#D97706' : '#16A34A', lineHeight: 1 }}>{metricasFabricaSel.acoes}</div>
-                                        <div style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)', fontWeight: 700, textTransform: 'uppercase', marginTop: 3 }}>Ações Pendentes</div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Barra de Filtros e Busca de Áreas */}
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem', flexWrap: 'wrap', background: 'rgba(0,0,0,0.2)', padding: '0.65rem 0.85rem', borderRadius: 12, border: '1px solid var(--border-color-dark)', marginBottom: '1rem' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: isMobile ? '1 1 100%' : '1', minWidth: isMobile ? '100%' : 220 }}>
-                                    <FaSearch size={12} color="var(--color-text-muted)" />
-                                    <input
-                                        type="text"
-                                        placeholder="Buscar setor, linha ou máquina…"
-                                        value={buscaInd}
-                                        onChange={e => setBuscaInd(e.target.value)}
-                                        style={{ ...inputSty, padding: '0.35rem 0.6rem', fontSize: '0.75rem' }}
-                                    />
-                                    {buscaInd && (
-                                        <button onClick={() => setBuscaInd('')} style={{ background: 'none', border: 'none', color: 'var(--color-text-muted)', cursor: 'pointer' }}>
-                                            <FaTimes size={11} />
-                                        </button>
-                                    )}
-                                </div>
-
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-                                    <span style={{ fontSize: '0.64rem', fontWeight: 700, color: 'var(--color-text-subtle)', textTransform: 'uppercase' }}>Status:</span>
-                                    {[
-                                        ['todas', 'Todas'],
-                                        ['auditadas', 'Auditadas'],
-                                        ['excelencia', 'Sol Pleno ☀️'],
-                                        ['atencao', 'Atenção ⚠️'],
-                                        ['sem_auditoria', 'Sem Auditoria 🌑']
-                                    ].map(([k, lbl]) => (
-                                        <button
-                                            key={k}
-                                            type="button"
-                                            onClick={() => setStatusInd(k)}
-                                            style={{
-                                                fontSize: '0.65rem',
-                                                fontWeight: 800,
-                                                padding: '0.22rem 0.55rem',
-                                                borderRadius: 6,
-                                                border: `1px solid ${statusInd === k ? ACCENT : 'var(--border-color-dark)'}`,
-                                                background: statusInd === k ? `${ACCENT}22` : 'transparent',
-                                                color: statusInd === k ? ACCENT : 'var(--color-text-muted)',
-                                                cursor: 'pointer'
-                                            }}
-                                        >
-                                            {lbl}
-                                        </button>
-                                    ))}
-                                </div>
-
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                    <span style={{ fontSize: '0.64rem', fontWeight: 700, color: 'var(--color-text-subtle)', textTransform: 'uppercase' }}>Ordem:</span>
-                                    <select
-                                        value={ordemInd}
-                                        onChange={e => setOrdemInd(e.target.value)}
-                                        style={{ ...inputSty, width: 'auto', padding: '0.25rem 0.5rem', fontSize: '0.72rem', fontWeight: 700 }}
-                                    >
-                                        <option value="pior">Pior Score Primeiro</option>
-                                        <option value="melhor">Melhor Score Primeiro</option>
-                                        <option value="recente">Mais Recente</option>
-                                        <option value="nome">Nome A-Z</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            {/* Grid das Áreas da Fábrica */}
-                            {areasFabricaFiltradas.length === 0 ? (
-                                <div style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
-                                    Nenhuma área encontrada com os filtros selecionados.
-                                </div>
-                            ) : (
-                                <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? '100%' : '260px'}, 1fr))`, gap: '0.75rem' }}>
-                                    {areasFabricaFiltradas.map(m => {
-                                        const score = m.ult ? solarDe(m.ult) : null;
-                                        const selo = solSelo(score);
-                                        const diasAtraso = m.ult ? Math.round((Date.now() - new Date(String(m.ult.data_auditoria || m.ult.created_at).slice(0, 10) + 'T12:00:00')) / 86400000) : null;
-                                        const atrasada = diasAtraso != null && diasAtraso > 30;
-
-                                        return (
-                                            <div
-                                                key={areaKey(m)}
-                                                className="glass-panel"
-                                                style={{
-                                                    borderRadius: 12,
-                                                    border: `1px solid ${m.ult ? `${selo.cor}44` : 'var(--border-color-dark)'}`,
-                                                    padding: '0.85rem',
-                                                    background: 'var(--bg-app)',
-                                                    display: 'flex',
-                                                    flexDirection: 'column',
-                                                    justifyContent: 'space-between',
-                                                    gap: '0.6rem'
-                                                }}
-                                            >
-                                                <div>
-                                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.4rem', marginBottom: '0.35rem' }}>
-                                                        <span style={{ fontSize: '0.58rem', fontWeight: 800, color: ACCENT, background: `${ACCENT}18`, borderRadius: 4, padding: '0.1rem 0.4rem', textTransform: 'uppercase' }}>
-                                                            {m.fabrica}
-                                                        </span>
-                                                        <SolSeloPill value={score} small />
-                                                    </div>
-
-                                                    <div style={{ fontSize: '0.88rem', fontWeight: 900, color: 'var(--color-text-main)', lineHeight: 1.25, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                                        {m.maquina || 'Setor inteiro'}
-                                                    </div>
-                                                    <div style={{ fontSize: '0.64rem', color: 'var(--color-text-subtle)', fontWeight: 700, marginTop: 2 }}>
-                                                        {m.setor} · {m.planta}
-                                                    </div>
-                                                </div>
-
-                                                {/* Medidor e Métricas Rápidas */}
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', background: 'rgba(255,255,255,0.02)', padding: '0.45rem 0.6rem', borderRadius: 8, border: '1px solid var(--border-color-dark)' }}>
-                                                    <RingGauge value={score} size={42} stroke={4.5} />
-                                                    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.64rem', fontWeight: 800 }}>
-                                                            <span style={{ color: ACCENT }}>5S: {m.ult?.score != null ? `${Math.round(m.ult.score)}%` : '—'}</span>
-                                                            <span style={{ color: SOL_ACCENT }}>SOL: {m.ult?.scores?.sol_geral != null ? `${m.ult.scores.sol_geral}%` : '—'}</span>
-                                                        </div>
-                                                        <div style={{ fontSize: '0.58rem', color: 'var(--color-text-muted)' }}>
-                                                            {m.ult ? `Última: ${fmtData(m.ult.data_auditoria)}` : 'Nunca auditada'}
-                                                        </div>
-                                                    </div>
-                                                </div>
-
-                                                {/* Detalhes de status & Ações */}
-                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.62rem', color: 'var(--color-text-muted)' }}>
-                                                    <div>
-                                                        {atrasada && <span style={{ color: '#DC2626', fontWeight: 800 }}>⚠️ +30 dias</span>}
-                                                        {!atrasada && diasAtraso != null && <span>Há {diasAtraso} dia(s)</span>}
-                                                        {m.acoesAbertas > 0 && <span style={{ marginLeft: 6, color: '#D97706', fontWeight: 800 }}>{m.acoesAbertas} ação(ões)</span>}
-                                                    </div>
-                                                    {m.delta != null && (
-                                                        <span style={{ fontWeight: 800, color: m.delta >= 0 ? '#16A34A' : '#DC2626' }}>
-                                                            {m.delta >= 0 ? '▲' : '▼'} {Math.abs(m.delta)} pts
-                                                        </span>
-                                                    )}
-                                                </div>
-
-                                                {/* Botões de Ação */}
-                                                <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.2rem' }}>
-                                                    {m.ult && (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => setSel(m.ult)}
-                                                            style={{ ...btnSec, flex: 1, padding: '0.35rem 0.5rem', fontSize: '0.66rem', justifyContent: 'center' }}
-                                                            title="Visualizar última auditoria"
-                                                        >
-                                                            <FaEye size={10} /> Ver
-                                                        </button>
-                                                    )}
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => { setNovaPrefill({ planta: m.planta, fabrica: m.fabrica, setor: m.setor, maquina: m.maquina }); setShowNova(true); }}
-                                                        style={{ ...btnPrim, flex: 1.3, padding: '0.35rem 0.5rem', fontSize: '0.68rem', justifyContent: 'center' }}
-                                                    >
-                                                        <FaBroom size={10} /> Auditar
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
-                        </div>
 
                         {/* ══════════════════════════════════════════════════════════════════════════════════
                             2. RADAR MÉDIO DO PARQUE (5S) & RAIOS DO SOL (SOL)
@@ -1975,6 +1879,11 @@ export default function Gestao5SView() {
             </div>
             </div>{/* fim da área rolável */}
 
+            {/* Evolução × retrocesso das auditorias marcadas */}
+            {showEvolucao && audsSelecionadas.length >= 2 && (
+                <EvolucaoSelecionadas auds={audsSelecionadas} onClose={() => setShowEvolucao(false)} />
+            )}
+
             {/* Modal nova auditoria */}
             {showNova && (
                 <NovaAuditoriaModal estrutura={estrutura} prefill={novaPrefill} userName={userName}
@@ -2027,6 +1936,439 @@ const Evolucao5S = ({ auditorias }) => {
     );
 };
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  EVOLUÇÃO × RETROCESSO — comparativo lúdico dos relatórios marcados
+// ═══════════════════════════════════════════════════════════════════════════════
+/*
+ * O gestor marca dois ou mais relatórios e vê numa tela só o sol subir ou cair
+ * entre eles. Não há média do período, projeção nem suavização: cada sol é o
+ * Índice Solar daquela auditoria e cada seta é a diferença entre duas datas.
+ * Embaixo, as 8 dimensões (5 sensos + 3 pilares) abrem o que puxou para cima e
+ * o que puxou para baixo — é a parte que responde "retrocedeu em quê?".
+ *
+ * O que a tela NÃO faz de propósito: comparar auditorias de áreas diferentes
+ * como se fossem a mesma série. Quando isso acontece ela avisa, em vez de
+ * entregar um número que ninguém pode usar.
+ */
+const EvolucaoSelecionadas = ({ auds, onClose }) => {
+    const isMobile = useIsMobile();
+    // Fundo branco: a mesma tela vira folha para projetar, imprimir ou anexar.
+    // A paleta escura do app é desenhada para o tablet no chão de fábrica e
+    // encosta no branco quando sai daqui — as duas convivem, e quem está com o
+    // relatório na mão escolhe na hora.
+    const [claro, setClaro] = useState(false);
+    const T = claro
+        ? { fg: '#0F172A', mut: '#475569', sub: '#64748B', bd: '#E2E8F0', trilho: 'rgba(15,23,42,0.06)', centro: '#CBD5E1', aviso: '#B45309', painel: '#F8FAFC' }
+        : { fg: 'var(--color-text-main)', mut: 'var(--color-text-muted)', sub: 'var(--color-text-subtle)', bd: 'var(--border-color-dark)', trilho: 'rgba(255,255,255,0.04)', centro: 'var(--border-color-dark)', aviso: '#FBBF24', painel: 'transparent' };
+
+    const VERDE = '#16A34A', VERMELHO = '#DC2626', NEUTRO = '#64748B';
+    const dataDe = (a) => String(a?.data_auditoria || a?.created_at || '').slice(0, 10);
+
+    const serie = [...auds]
+        .sort((a, b) => dataDe(a).localeCompare(dataDe(b)) || Number(a.id || 0) - Number(b.id || 0))
+        .map(a => ({ a, s: scoresDaAuditoria(a), dims: dimsDaAuditoria(a) }));
+
+    const n = serie.length;
+    const prim = serie[0], ult = serie[n - 1];
+    const deltaTotal = (prim.s.solar != null && ult.s.solar != null) ? ult.s.solar - prim.s.solar : null;
+    const passos = serie.slice(1).map((e, i) => ({
+        d: (serie[i].s.solar != null && e.s.solar != null) ? e.s.solar - serie[i].s.solar : null,
+    }));
+
+    const rascunhos = serie.filter(e => e.a.status !== 'concluida').length;
+    const areas = new Set(serie.map(e => areaKey(e.a)));
+    const mesmaArea = areas.size === 1;
+
+    // Dimensões: da primeira para a última auditoria marcada
+    const DIMS = [
+        ...SENSOS.map(s => ({ id: s.id, num: s.num, nome: (s.nome.split('·')[1] || s.nome).trim(), cor: s.cor })),
+        ...SOL_PILARES.map(p => ({ id: p.id, num: `SOL·${p.num}`, nome: p.nome, cor: p.cor })),
+    ];
+    const dimDeltas = DIMS.map(d => {
+        const de = prim.dims[d.id], para = ult.dims[d.id];
+        return { ...d, de, para, delta: (de != null && para != null) ? para - de : null };
+    }).sort((a, b) => (a.delta ?? 0) - (b.delta ?? 0));
+    const maxAbs = Math.max(10, ...dimDeltas.map(x => Math.abs(x.delta ?? 0)));
+
+    // ── Céu: o sol de cada auditoria, na ordem das datas ────────────────────
+    // Na tela larga a faixa do céu é achatada de propósito: o print vai parar
+    // num A4, e quanto mais larga a imagem, menos altura da folha ela come.
+    // No celular volta a ser quadrada, senão o texto do SVG encolhe junto.
+    const W = isMobile ? 760 : 1120, H = isMobile ? 214 : 226, horiz = isMobile ? 158 : 172, topo = 34;
+    const seloUlt = solSelo(ult.s.solar);
+    const skyPairs = claro
+        ? { none: ['#F8FAFC', '#E2E8F0'], madrugada: ['#F5F3FF', '#DDD6FE'], amanhecer: ['#FFF7ED', '#FED7AA'], raiando: ['#FFFBEB', '#FDE68A'], pleno: ['#F0F9FF', '#FEF3C7'] }
+        : { none: ['#1e293b', '#334155'], madrugada: ['#312e81', '#4338ca'], amanhecer: ['#7c2d12', '#fb923c'], raiando: ['#b45309', '#fcd34d'], pleno: ['#0284c7', '#fde68a'] };
+    const [sky0, sky1] = skyPairs[seloUlt.key] || skyPairs.none;
+    const solo = claro ? '#CBD5E1' : '#0d2818';
+    const silhueta = claro ? '#94A3B8' : '#08160e';
+    const linhaHoriz = claro ? '#D97706' : '#fcd34d';
+    const gradeCor = claro ? 'rgba(15,23,42,0.22)' : 'rgba(255,255,255,0.18)';
+    const gradeTexto = claro ? '#64748B' : 'rgba(255,255,255,0.5)';
+    const rotuloData = claro ? '#0F172A' : '#e2e8f0';
+    const rotuloSub = claro ? '#475569' : '#94a3b8';
+    // No claro o sol precisa de pigmento: amarelo-claro sobre folha branca some.
+    const corSol = (key) => claro
+        ? ({ pleno: '#EAB308', raiando: '#F59E0B', amanhecer: '#EA580C', madrugada: '#6366F1' }[key] || '#94A3B8')
+        : ({ pleno: '#FDE047', raiando: '#FBBF24', amanhecer: '#FB923C', madrugada: '#818CF8' }[key] || '#94A3B8');
+    const px = (i) => n === 1 ? W / 2 : 44 + (i / (n - 1)) * (W - 88);
+    const py = (v) => v == null ? horiz : horiz - (v / 100) * (horiz - topo);
+    const corDelta = (d) => d == null ? NEUTRO : d > 0 ? (claro ? VERDE : '#4ADE80') : d < 0 ? (claro ? VERMELHO : '#F87171') : NEUTRO;
+
+    return (
+        <ModalShell claro={claro} onClose={onClose} largura={1180}
+            title={<><FaChartLine color={SOL_ACCENT} /> Evolução × retrocesso · {n} relatórios</>}
+            acoes={
+                <button onClick={() => setClaro(c => !c)} title="Alterna entre o tema escuro do app e a folha branca — para projetar, imprimir ou colar num A4"
+                    style={{ ...btnSec, fontSize: '0.68rem', padding: '0.3rem 0.7rem', border: `1px solid ${T.bd}`, color: T.mut, background: T.painel }}>
+                    {claro ? 'Fundo escuro' : 'Fundo branco'}
+                </button>
+            }
+            footer={<button onClick={onClose} style={btnPrim}>Fechar</button>}>
+
+            {/* Placar: primeira → última marcada */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.9rem', flexWrap: 'wrap', marginBottom: '0.7rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                    <span style={{ fontSize: '1.35rem', fontWeight: 900, color: scoreCor(prim.s.solar) }}>{prim.s.solar != null ? `${prim.s.solar}%` : '—'}</span>
+                    <span style={{ color: T.sub }}>→</span>
+                    <span style={{ fontSize: '1.7rem', fontWeight: 900, color: scoreCor(ult.s.solar) }}>{ult.s.solar != null ? `${ult.s.solar}%` : '—'}</span>
+                    <span style={{ fontSize: '0.95rem', fontWeight: 900, color: deltaTotal == null ? NEUTRO : deltaTotal > 0 ? VERDE : deltaTotal < 0 ? VERMELHO : NEUTRO, whiteSpace: 'nowrap' }}>
+                        {deltaTotal == null ? '—' : deltaTotal === 0 ? '= 0 pt' : `${deltaTotal > 0 ? '▲' : '▼'} ${Math.abs(deltaTotal)} pt${Math.abs(deltaTotal) === 1 ? '' : 's'}`}
+                    </span>
+                </div>
+            </div>
+
+            {/* Avisos honestos: área misturada e rascunho no meio da série */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '0.8rem' }}>
+                <div style={{ fontSize: '0.66rem', color: mesmaArea ? T.sub : T.aviso, lineHeight: 1.45 }}>
+                    {mesmaArea
+                        ? <>Mesma linha/máquina: <b>{areaLabel(prim.a)}</b>.</>
+                        : <><b>Atenção:</b> os relatórios marcados são de {areas.size} áreas diferentes. A linha compara áreas distintas — a diferença não é evolução de uma mesma linha.</>}
+                </div>
+                {rascunhos > 0 && (
+                    <div style={{ fontSize: '0.66rem', color: T.aviso, lineHeight: 1.45 }}>
+                        <b>{rascunhos} rascunho(s)</b> na seleção: o score deles cobre só os critérios já avaliados.
+                    </div>
+                )}
+            </div>
+
+            {/* Trajetória do sol */}
+            <div style={{ overflowX: 'auto', borderRadius: 12, border: `1px solid ${T.bd}`, marginBottom: '1rem' }}>
+                <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', minWidth: isMobile ? 560 : 0, display: 'block' }}>
+                    <defs>
+                        <linearGradient id={`evoSky${claro ? 'L' : 'D'}`} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor={sky0} /><stop offset="100%" stopColor={sky1} />
+                        </linearGradient>
+                    </defs>
+                    <rect x="0" y="0" width={W} height={H} fill={`url(#evoSky${claro ? 'L' : 'D'})`} />
+                    {/* réguas das faixas do selo */}
+                    {[FAIXA_ATENCAO, FAIXA_CONSOLIDA, FAIXA_EXCELENCIA].map(f => (
+                        <g key={f}>
+                            <line x1="30" y1={py(f)} x2={W - 10} y2={py(f)} stroke={gradeCor} strokeWidth="1" strokeDasharray="4 5" />
+                            <text x="26" y={py(f) + 3} textAnchor="end" fontSize="9" fontWeight="700" fill={gradeTexto}>{f}</text>
+                        </g>
+                    ))}
+                    {/* trechos entre auditorias: verde sobe, vermelho cai */}
+                    {serie.slice(1).map((e, i) => {
+                        const x1 = px(i), y1 = py(serie[i].s.solar), x2 = px(i + 1), y2 = py(e.s.solar);
+                        const d = passos[i].d;
+                        return (
+                            <g key={`t${i}`}>
+                                <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={corDelta(d)} strokeWidth="2.5" strokeLinecap="round" opacity="0.9" />
+                                <text x={(x1 + x2) / 2} y={Math.min(y1, y2) - 13} textAnchor="middle" fontSize="12" fontWeight="900" fill={corDelta(d)}>
+                                    {d == null ? '' : d === 0 ? '=' : `${d > 0 ? '▲' : '▼'}${Math.abs(d)}`}
+                                </text>
+                            </g>
+                        );
+                    })}
+                    {/* solo */}
+                    <rect x="0" y={horiz} width={W} height={H - horiz} fill={solo} />
+                    <rect x="0" y={horiz} width={W} height="2" fill={linhaHoriz} opacity="0.45" />
+                    <g fill={silhueta}>
+                        <rect x="14" y={horiz - 11} width="22" height="11" /><rect x="24" y={horiz - 17} width="6" height="6" />
+                        <rect x={W - 44} y={horiz - 14} width="26" height="14" /><rect x={W - 36} y={horiz - 21} width="5" height="7" />
+                    </g>
+                    {/* um sol por auditoria */}
+                    {serie.map((e, i) => {
+                        const v = e.s.solar, cx = px(i), cy = py(v);
+                        const cor = corSol(solSelo(v).key);
+                        const R = 15;
+                        const num = numeroRelatorio(e.a);
+                        return (
+                            <g key={e.a.id}>
+                                <g stroke={cor} strokeWidth="2" strokeLinecap="round" opacity={0.3 + ((v ?? 0) / 100) * 0.6}>
+                                    {Array.from({ length: 8 }, (_, k) => k * 45).map(ang => {
+                                        const rad = ang * Math.PI / 180, r1 = R + 4, r2 = R + 4 + 5 + ((v ?? 0) / 100) * 7;
+                                        return <line key={ang} x1={cx + Math.cos(rad) * r1} y1={cy + Math.sin(rad) * r1} x2={cx + Math.cos(rad) * r2} y2={cy + Math.sin(rad) * r2} />;
+                                    })}
+                                </g>
+                                <circle cx={cx} cy={cy} r={R} fill={cor} stroke={claro ? 'rgba(15,23,42,0.3)' : 'rgba(0,0,0,0.35)'} strokeWidth="1.5" />
+                                <text x={cx} y={cy + 4} textAnchor="middle" fontSize="11" fontWeight="900" fill="#1a1000">{v != null ? v : '—'}</text>
+                                <text x={cx} y={horiz + 17} textAnchor="middle" fontSize="10" fontWeight="800" fill={rotuloData}>{fmtData(e.a.data_auditoria)}</text>
+                                <text x={cx} y={horiz + 31} textAnchor="middle" fontSize="9" fill={rotuloSub}>
+                                    {num ? `Nº ${num}` : (e.a.maquina || e.a.setor || '')}
+                                </text>
+                                {e.a.status !== 'concluida' && (
+                                    <text x={cx} y={horiz + 44} textAnchor="middle" fontSize="9" fontWeight="700" fill={claro ? '#B45309' : '#fbbf24'}>rascunho</text>
+                                )}
+                            </g>
+                        );
+                    })}
+                </svg>
+            </div>
+
+            {/* O que subiu e o que caiu, por dimensão */}
+            <div style={{ fontSize: '0.78rem', fontWeight: 800, color: T.fg, marginBottom: '0.15rem' }}>
+                O que mudou, dimensão por dimensão
+            </div>
+            <div style={{ fontSize: '0.64rem', color: T.mut, marginBottom: '0.6rem' }}>
+                Da primeira ({fmtData(prim.a.data_auditoria)}) para a última ({fmtData(ult.a.data_auditoria)}) marcada. Retrocesso à esquerda, evolução à direita.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                {dimDeltas.map(d => {
+                    const larg = d.delta == null ? 0 : (Math.abs(d.delta) / maxAbs) * 50;
+                    const cor = d.delta == null ? NEUTRO : d.delta > 0 ? VERDE : d.delta < 0 ? VERMELHO : NEUTRO;
+                    return (
+                        <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span style={{ width: isMobile ? 84 : 132, flexShrink: 0, fontSize: isMobile ? '0.62rem' : '0.66rem', fontWeight: 800, color: claro ? tinta(d.cor) : d.cor, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.num} {d.nome}</span>
+                            <div style={{ flex: 1, minWidth: 80, height: 14, position: 'relative', background: T.trilho, borderRadius: 4 }}>
+                                <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: T.centro }} />
+                                {d.delta != null && d.delta !== 0 && (
+                                    <div style={{ position: 'absolute', top: 2, bottom: 2, borderRadius: 3, background: cor, ...(d.delta > 0 ? { left: '50%', width: `${larg}%` } : { right: '50%', width: `${larg}%` }) }} />
+                                )}
+                            </div>
+                            <span style={{ width: 46, textAlign: 'right', flexShrink: 0, fontSize: '0.68rem', fontWeight: 900, color: cor, whiteSpace: 'nowrap' }}>
+                                {d.delta == null ? '—' : d.delta > 0 ? `+${d.delta}` : d.delta}
+                            </span>
+                            <span style={{ width: isMobile ? 64 : 74, textAlign: 'right', flexShrink: 0, fontSize: isMobile ? '0.56rem' : '0.62rem', color: T.sub, whiteSpace: 'nowrap' }}>
+                                {d.de != null ? `${d.de}%` : '—'} → {d.para != null ? `${d.para}%` : '—'}
+                            </span>
+                        </div>
+                    );
+                })}
+            </div>
+
+            <div style={{ fontSize: '0.62rem', color: T.sub, marginTop: '0.8rem', lineHeight: 1.5 }}>
+                Cada sol é o Índice Solar daquela auditoria; cada seta é a diferença entre duas datas marcadas. Não há média do período nem projeção — só o que foi medido.
+            </div>
+        </ModalShell>
+    );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ROTINA SEMANAL — quem já foi auditado nesta semana e quem está pendente
+// ═══════════════════════════════════════════════════════════════════════════════
+const corCobertura = (p) => p == null ? 'var(--color-text-subtle)' : p >= 100 ? '#16A34A' : p >= 50 ? '#D97706' : '#DC2626';
+const pct = (a, b) => b ? Math.round((a / b) * 100) : null;
+// Mesmo critério do solarDe do painel (solar_bruto > solar > score antigo)
+const solarDeAud = (aud) => aud?.scores?.solar_bruto ?? aud?.scores?.solar ?? aud?.score ?? null;
+
+const RotinaSemanal = ({ mapa, semanas, isMobile, onAuditar, onAbrir }) => {
+    const atual = semanaAtualKey();
+    const [semana, setSemana] = useState(atual);
+    const [fabrica, setFabrica] = useState('todas');
+    const [ver, setVer] = useState('pendentes'); // pendentes | avaliadas | todas
+    const [busca, setBusca] = useState('');
+    const ehAtual = semana === atual;
+
+    const fabricas = [...new Set(mapa.map(m => m.fabrica).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    // Área (setor) pelo nome, juntando as fábricas: INJEÇÃO, MONTAGEM, TAMPOGRAFIA…
+    const areas = [...new Set(mapa.filter(m => fabrica === 'todas' || m.fabrica === fabrica).map(m => norm(m.setor)).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b));
+    const [areaSel, setArea] = useState(() => mapa.some(m => norm(m.setor) === 'TAMPOGRAFIA') ? 'TAMPOGRAFIA' : 'todas');
+    // Fábrica sem essa área: mostra todas em vez de uma lista vazia
+    const area = areaSel === 'todas' || areas.includes(areaSel) ? areaSel : 'todas';
+    const daFabrica = mapa.filter(m => fabrica === 'todas' || m.fabrica === fabrica);
+    const base = daFabrica.filter(m => area === 'todas' || norm(m.setor) === area);
+    const pendArea = (a) => daFabrica.filter(m => (a === 'todas' || norm(m.setor) === a) && !audDe(m, semana)).length;
+    const audDe = (m, s) => semanas.get(areaKey(m))?.get(s) || null;
+    const feitas = base.filter(m => audDe(m, semana)).length;
+    const cobertura = pct(feitas, base.length);
+    // Dias que ainda restam para fechar a semana (conta hoje)
+    const restam = ehAtual ? 7 - ((new Date().getDay() + 6) % 7) : 0;
+
+    // Agrupa por fábrica · setor, pior cobertura primeiro
+    const grupos = (() => {
+        const g = new Map();
+        base.forEach(m => {
+            const k = `${m.fabrica}|${m.setor}`;
+            if (!g.has(k)) g.set(k, { k, fabrica: m.fabrica, setor: m.setor, itens: [] });
+            g.get(k).itens.push({ ...m, aud: audDe(m, semana) });
+        });
+        const q = norm(busca);
+        return [...g.values()].map(gr => {
+            const ok = gr.itens.filter(i => i.aud).length;
+            const visiveis = gr.itens
+                .filter(i => ver === 'todas' || (ver === 'pendentes' ? !i.aud : i.aud))
+                .filter(i => !q || `${norm(gr.fabrica)} ${norm(gr.setor)} ${norm(i.maquina)}`.includes(q))
+                .sort((a, b) => String(a.maquina || '').localeCompare(String(b.maquina || ''), undefined, { numeric: true }));
+            return { ...gr, ok, total: gr.itens.length, visiveis };
+        }).filter(gr => gr.visiveis.length).sort((a, b) => (a.ok / a.total) - (b.ok / b.total) || `${a.fabrica}${a.setor}`.localeCompare(`${b.fabrica}${b.setor}`));
+    })();
+
+    // Histórico: 8 semanas terminando na selecionada, por setor
+    const colunas = Array.from({ length: 8 }, (_, i) => somaDias(semana, -7 * (7 - i)));
+    const setoresHist = (() => {
+        const g = new Map();
+        base.forEach(m => { const k = `${m.fabrica}|${m.setor}`; if (!g.has(k)) g.set(k, { k, nome: `${m.fabrica} · ${m.setor}`, itens: [] }); g.get(k).itens.push(m); });
+        return [...g.values()].sort((a, b) => a.nome.localeCompare(b.nome, undefined, { numeric: true }));
+    })();
+    const celula = (itens, s) => pct(itens.filter(m => audDe(m, s)).length, itens.length);
+
+    const chip = (ativo) => ({ ...btnSec, padding: '0.3rem 0.7rem', fontSize: '0.7rem', borderColor: ativo ? `${ACCENT}88` : 'var(--border-color-dark)', color: ativo ? ACCENT : 'var(--color-text-muted)', background: ativo ? `${ACCENT}14` : 'transparent' });
+    const navBtn = (habilitado) => ({ ...btnSec, padding: '0.35rem 0.6rem', opacity: habilitado ? 1 : 0.35, cursor: habilitado ? 'pointer' : 'default' });
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {/* Cabeçalho da semana */}
+            <div className="glass-panel" style={{ borderRadius: 14, border: '1px solid var(--border-color-dark)', padding: '1rem 1.1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.8rem', flexWrap: 'wrap' }}>
+                    <div>
+                        <div style={{ fontSize: '0.95rem', fontWeight: 900, color: 'var(--color-text-main)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <FaCalendarAlt color={ACCENT} size={14} /> Rotina semanal
+                        </div>
+                        <div style={{ fontSize: '0.68rem', color: 'var(--color-text-muted)', marginTop: 2 }}>Toda linha e máquina precisa de uma auditoria concluída por semana (segunda a domingo).</div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <button onClick={() => setSemana(somaDias(semana, -7))} style={navBtn(true)} title="Semana anterior"><FaChevronLeft size={10} /></button>
+                        <div style={{ minWidth: isMobile ? 0 : 210, textAlign: 'center', fontSize: '0.76rem', fontWeight: 800, color: 'var(--color-text-main)' }}>
+                            {rotuloSemana(semana)}
+                            {ehAtual ? <div style={{ fontSize: '0.6rem', color: ACCENT, fontWeight: 700 }}>semana atual · {restam === 1 ? 'último dia' : `faltam ${restam} dias`}</div>
+                                : <button onClick={() => setSemana(atual)} style={{ display: 'block', margin: '0 auto', background: 'none', border: 'none', color: ACCENT, fontSize: '0.6rem', fontWeight: 700, cursor: 'pointer', padding: 0 }}>voltar para a semana atual</button>}
+                        </div>
+                        <button onClick={() => !ehAtual && setSemana(somaDias(semana, 7))} disabled={ehAtual} style={navBtn(!ehAtual)} title="Próxima semana"><FaChevronRight size={10} /></button>
+                    </div>
+                </div>
+
+                {/* Números da semana */}
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', gap: '0.6rem', marginTop: '0.9rem' }}>
+                    {[
+                        ['Cobertura', cobertura != null ? `${cobertura}%` : '—', corCobertura(cobertura)],
+                        ['Avaliadas', `${feitas}/${base.length}`, 'var(--color-text-main)'],
+                        ['Pendentes', base.length - feitas, base.length - feitas ? '#DC2626' : '#16A34A'],
+                        [ehAtual ? 'Por dia até domingo' : 'Situação', ehAtual ? (base.length - feitas ? Math.ceil((base.length - feitas) / restam) : 0) : (feitas === base.length ? 'Fechada' : 'Não fechou'), ehAtual ? 'var(--color-text-main)' : corCobertura(cobertura)],
+                    ].map(([l, v, c]) => (
+                        <div key={l} style={{ background: 'var(--bg-surface-glass)', border: '1px solid var(--border-color-dark)', borderRadius: 10, padding: '0.55rem 0.7rem' }}>
+                            <div style={{ fontSize: '1.15rem', fontWeight: 900, color: c }}>{v}</div>
+                            <div style={{ fontSize: '0.58rem', fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{l}</div>
+                        </div>
+                    ))}
+                </div>
+                <div style={{ height: 6, borderRadius: 4, background: 'var(--border-color-dark)', marginTop: '0.7rem', overflow: 'hidden' }}>
+                    <div style={{ width: `${cobertura || 0}%`, height: '100%', background: corCobertura(cobertura), transition: 'width 0.3s' }} />
+                </div>
+            </div>
+
+            {/* Área — o número é o que está pendente nela na semana escolhida */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.62rem', fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginRight: '0.2rem' }}>Área</span>
+                {['todas', ...areas].map(a => {
+                    const n = pendArea(a);
+                    return (
+                        <button key={a} onClick={() => setArea(a)} style={chip(area === a)}>
+                            {a === 'todas' ? 'Todas' : a}
+                            <span style={{ fontSize: '0.6rem', fontWeight: 900, color: n ? '#DC2626' : '#16A34A' }}>{n || '✓'}</span>
+                        </button>
+                    );
+                })}
+            </div>
+
+            {/* Filtros */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                {[['pendentes', 'Pendentes'], ['avaliadas', 'Avaliadas'], ['todas', 'Todas']].map(([k, l]) => (
+                    <button key={k} onClick={() => setVer(k)} style={chip(ver === k)}>{l}</button>
+                ))}
+                <select value={fabrica} onChange={e => setFabrica(e.target.value)} style={{ ...inputSty, width: 'auto', padding: '0.3rem 0.5rem', fontSize: '0.72rem' }}>
+                    <option value="todas">Todas as fábricas</option>
+                    {fabricas.map(f => <option key={f}>{f}</option>)}
+                </select>
+                <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar setor, linha ou máquina…" style={{ ...inputSty, flex: '1 1 200px', padding: '0.35rem 0.6rem', fontSize: '0.74rem' }} />
+            </div>
+
+            {/* Lista da semana, por setor */}
+            {grupos.length === 0 ? (
+                <div style={{ padding: '2.5rem 1rem', textAlign: 'center', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
+                    {ver === 'pendentes' && base.length ? <><FaCheckCircle size={28} color="#16A34A" style={{ marginBottom: '0.6rem' }} /><div style={{ fontWeight: 800, color: 'var(--color-text-main)' }}>Nenhuma pendência nesta semana.</div></> : 'Nada para mostrar com esses filtros.'}
+                </div>
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                    {grupos.map(gr => {
+                        const p = pct(gr.ok, gr.total);
+                        return (
+                            <div key={gr.k} className="glass-panel" style={{ borderRadius: 12, border: '1px solid var(--border-color-dark)', padding: '0.75rem 0.9rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.55rem' }}>
+                                    <FaIndustry size={11} color={ACCENT} />
+                                    <span style={{ fontSize: '0.8rem', fontWeight: 900, color: 'var(--color-text-main)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{gr.fabrica} · {gr.setor}</span>
+                                    <span style={{ fontSize: '0.66rem', fontWeight: 800, color: corCobertura(p) }}>{gr.ok}/{gr.total}</span>
+                                    <div style={{ width: 70, height: 5, borderRadius: 3, background: 'var(--border-color-dark)', overflow: 'hidden', flexShrink: 0 }}>
+                                        <div style={{ width: `${p}%`, height: '100%', background: corCobertura(p) }} />
+                                    </div>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? '100%' : '210px'}, 1fr))`, gap: '0.4rem' }}>
+                                    {gr.visiveis.map(m => m.aud ? (
+                                        <button key={areaKey(m)} onClick={() => onAbrir(m.aud)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#16A34A10', border: '1px solid #16A34A44', borderRadius: 8, padding: '0.4rem 0.55rem', cursor: 'pointer', textAlign: 'left' }}>
+                                            <FaCheckCircle size={11} color="#16A34A" style={{ flexShrink: 0 }} />
+                                            <span style={{ flex: 1, minWidth: 0 }}>
+                                                <span style={{ display: 'block', fontSize: '0.72rem', fontWeight: 800, color: 'var(--color-text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.maquina || 'Setor inteiro'}</span>
+                                                <span style={{ display: 'block', fontSize: '0.58rem', color: 'var(--color-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fmtCurto(m.aud.data_auditoria)}{m.aud.auditor ? ` · ${m.aud.auditor}` : ''}</span>
+                                            </span>
+                                            {solarDeAud(m.aud) != null && <span style={{ fontSize: '0.66rem', fontWeight: 900, color: scoreCor(solarDeAud(m.aud)) }}>{Math.round(solarDeAud(m.aud))}%</span>}
+                                        </button>
+                                    ) : (
+                                        <div key={areaKey(m)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', border: '1px solid #DC262644', background: '#DC26260a', borderRadius: 8, padding: '0.4rem 0.55rem' }}>
+                                            <FaExclamationTriangle size={10} color="#DC2626" style={{ flexShrink: 0 }} />
+                                            <span style={{ flex: 1, minWidth: 0 }}>
+                                                <span style={{ display: 'block', fontSize: '0.72rem', fontWeight: 800, color: 'var(--color-text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.maquina || 'Setor inteiro'}</span>
+                                                <span style={{ display: 'block', fontSize: '0.58rem', color: 'var(--color-text-subtle)' }}>{m.ult ? `última: ${fmtCurto(m.ult.data_auditoria)}` : 'nunca auditada'}</span>
+                                            </span>
+                                            {ehAtual && <button onClick={() => onAuditar(m)} style={{ ...btnSec, padding: '0.25rem 0.55rem', fontSize: '0.64rem', borderColor: `${ACCENT}55`, color: ACCENT }}><FaBroom size={9} /> Auditar</button>}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+
+            {/* Últimas 8 semanas por setor */}
+            <div className="glass-panel" style={{ borderRadius: 14, border: '1px solid var(--border-color-dark)', padding: '1rem 1.1rem' }}>
+                <div style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--color-text-main)' }}>Últimas 8 semanas</div>
+                <div style={{ fontSize: '0.64rem', color: 'var(--color-text-muted)', margin: '0.15rem 0 0.7rem' }}>% das linhas/máquinas do setor avaliadas em cada semana. Clique numa semana para abri-la.</div>
+                <div style={{ overflowX: 'auto' }}>
+                    <table style={{ borderCollapse: 'separate', borderSpacing: 3, fontSize: '0.66rem', width: '100%' }}>
+                        <thead>
+                            <tr>
+                                <th style={{ textAlign: 'left', color: 'var(--color-text-subtle)', fontWeight: 700, padding: '0 0.4rem', minWidth: 150 }}>Setor</th>
+                                {colunas.map(s => (
+                                    <th key={s} onClick={() => setSemana(s)} style={{ cursor: 'pointer', color: s === semana ? ACCENT : 'var(--color-text-subtle)', fontWeight: 800, whiteSpace: 'nowrap', padding: '0 0.2rem' }}>S{numSemana(s)}<div style={{ fontWeight: 600, fontSize: '0.56rem' }}>{fmtCurto(s)}</div></th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {[{ k: '__total', nome: 'Total', itens: base }, ...setoresHist].map(row => (
+                                <tr key={row.k}>
+                                    <td style={{ padding: '0.25rem 0.4rem', fontWeight: row.k === '__total' ? 900 : 700, color: 'var(--color-text-main)', whiteSpace: 'nowrap' }}>{row.nome} <span style={{ color: 'var(--color-text-subtle)', fontWeight: 600 }}>({row.itens.length})</span></td>
+                                    {colunas.map(s => {
+                                        const v = s > atual ? null : celula(row.itens, s);
+                                        const c = corCobertura(v);
+                                        return (
+                                            <td key={s} onClick={() => setSemana(s)} title={v != null ? `${rotuloSemana(s)}: ${v}%` : ''}
+                                                style={{ cursor: 'pointer', textAlign: 'center', fontWeight: 800, color: v == null ? 'var(--color-text-subtle)' : c, background: v == null ? 'transparent' : `${c}1a`, border: `1px solid ${s === semana ? ACCENT : 'transparent'}`, borderRadius: 5, padding: '0.25rem 0.3rem', minWidth: 42 }}>
+                                                {v == null ? '—' : `${v}%`}
+                                            </td>
+                                        );
+                                    })}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // Modal: nova auditoria (planta → fábrica → setor → linha/máquina do cadastro)
 const NovaAuditoriaModal = ({ estrutura, prefill, userName, onClose, onCreate }) => {
     const [planta, setPlanta] = useState(prefill?.planta || '');
@@ -2039,8 +2381,10 @@ const NovaAuditoriaModal = ({ estrutura, prefill, userName, onClose, onCreate })
     const fabricas = [...new Set(estrutura.filter(e => e.planta === planta).map(e => e.fabrica))].filter(Boolean).sort();
     const setores = [...new Set(estrutura.filter(e => e.planta === planta && e.fabrica === fabrica).map(e => e.setor))].filter(Boolean).sort();
     // Linhas/máquinas do setor selecionado (ordenadas numericamente)
-    const maquinas = [...new Set(estrutura.filter(e => e.planta === planta && e.fabrica === fabrica && e.setor === setor).map(e => e.maquina))]
+    // (as que compõem uma linha não entram: quem audita, audita a linha)
+    const maquinas = [...new Set(estrutura.filter(e => e.planta === planta && e.fabrica === fabrica && e.setor === setor && !emLinha(estrutura, e)).map(e => e.maquina))]
         .filter(Boolean).sort((a, b) => { const na = parseInt(String(a).match(/\d+/)?.[0] || 0, 10), nb = parseInt(String(b).match(/\d+/)?.[0] || 0, 10); return na - nb || String(a).localeCompare(String(b)); });
+    const composicao = maquina ? composicaoLinha(estrutura, { planta, fabrica, setor, maquina }) : [];
     const ok = planta && fabrica && setor;
     return (
         <ModalShell title={<><FaBroom color={ACCENT} /> Nova Auditoria 5S</>} onClose={onClose}
@@ -2069,6 +2413,7 @@ const NovaAuditoriaModal = ({ estrutura, prefill, userName, onClose, onCreate })
                 <div><label style={labelSty}>Auditor</label><input style={inputSty} value={auditor} onChange={e => setAuditor(e.target.value)} /></div>
                 <div><label style={labelSty}>Acompanhante</label><input style={inputSty} value={acompanhante} onChange={e => setAcompanhante(e.target.value)} placeholder="Líder da área (opcional)" /></div>
             </div>
+            {composicao.length > 0 && <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', marginTop: '0.6rem' }}><b style={{ color: 'var(--color-text-main)' }}>{maquina}</b> é composta por: {composicao.join(', ')}. Avalie o conjunto.</div>}
             {maquinas.length > 0 && !maquina && <div style={{ fontSize: '0.66rem', color: 'var(--color-text-muted)', marginTop: '0.6rem' }}>Deixe em <b>Setor inteiro</b> para auditar o setor como um todo, ou escolha uma linha/máquina específica.</div>}
         </ModalShell>
     );

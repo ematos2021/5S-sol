@@ -3,17 +3,15 @@ import { FaBroom, FaSun, FaSitemap, FaSignOutAlt, FaUserCircle, FaLock, FaUser }
 import Gestao5SView from './pages/Gestao5SView';
 import PlantasView from './pages/PlantasView';
 import { setUsuario } from './services/usuario';
-import { getSessao, setSessao } from './services/sessao';
 import { iniciarNativo } from './services/nativo';
 
 const ACCENT = '#22C55E';
 const SOL = '#F59E0B';
 
-/* ── Credenciais fictícias ── */
+/* ── Usuários (no próprio pacote do app: é portaria, não cofre) ── */
 const USERS = [
-    { user: 'admin', pass: 'admin123', nome: 'Administrador' },
-    { user: 'auditor', pass: 'auditor1', nome: 'Auditor SGI' },
-    { user: 'gestor', pass: 'gestor1', nome: 'Gestor 5S' },
+    { user: 'eugenio', pass: '123', nome: 'Eugênio', perfil: 'admin' },
+    { user: 'pedro', pass: '123', nome: 'Pedro', perfil: 'admin' },
 ];
 
 /* ═══════════════ Tela de Login ═══════════════ */
@@ -132,25 +130,6 @@ function LoginScreen({ onLogin }) {
                         Entrar
                     </button>
                 </form>
-
-                {/* Credenciais de teste */}
-                <div style={{
-                    marginTop: '1.6rem', padding: '0.7rem 0.85rem',
-                    background: 'rgba(255,255,255,0.03)', borderRadius: 10,
-                    border: '1px solid rgba(255,255,255,0.05)',
-                }}>
-                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--color-text-subtle)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.4rem' }}>
-                        Credenciais de teste
-                    </div>
-                    {USERS.map(u => (
-                        <div key={u.user} style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
-                            <span style={{ color: ACCENT, fontWeight: 700 }}>{u.user}</span>
-                            <span style={{ color: 'var(--color-text-subtle)', margin: '0 0.3rem' }}>/</span>
-                            <span style={{ fontFamily: 'monospace' }}>{u.pass}</span>
-                            <span style={{ color: 'var(--color-text-subtle)', fontSize: '0.64rem', marginLeft: '0.4rem' }}>— {u.nome}</span>
-                        </div>
-                    ))}
-                </div>
             </div>
         </div>
     );
@@ -158,13 +137,12 @@ function LoginScreen({ onLogin }) {
 
 /* ═══════════════ App Principal ═══════════════ */
 export default function App() {
-    // A sessão é lida do aparelho: quem já entrou não precisa logar de novo a
-    // cada vez que abre o app entre uma área e outra.
-    const [loggedUser, setLoggedUser] = useState(() => getSessao());
+    // Sessão só em memória: toda vez que o app/site abre, começa no login.
+    const [loggedUser, setLoggedUser] = useState(null);
     const [tab, setTab] = useState('cinco-s');
 
-    const entrar = (u) => { setSessao(u); setUsuario(u.nome); setLoggedUser(u); };
-    const sair = () => { setSessao(null); setLoggedUser(null); };
+    const entrar = (u) => { setUsuario(u.nome); setLoggedUser(u); };
+    const sair = () => setLoggedUser(null);
 
     // App instalado: barra de status, splash e botão "voltar" do Android.
     // Espelhamos a aba num ref porque o callback nativo é registrado uma vez só

@@ -23,7 +23,7 @@ copy .env.example .env    # e preencha as duas linhas
 npm.cmd run dev           # http://localhost:5180
 ```
 
-Acessos de teste: `admin/admin123`, `auditor/auditor1`, `gestor/gestor1`.
+Acesso: os usuários ficam em `USERS`, no `src/App.jsx`. O app sempre abre no login (a sessão não fica salva no aparelho).
 
 ## Configurações
 
