@@ -44,7 +44,15 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: android-actions/setup-android@v3
+      # O runner ubuntu-latest já traz o Android SDK em $ANDROID_HOME. A action
+      # android-actions/setup-android@v3 baixava outro cmdline-tools e caía no
+      # aceite das licenças ("6 of 7 SDK package licenses not accepted").
+      # Aqui só aceitamos as licenças no SDK que já está lá; o Gradle baixa o
+      # platform/build-tools que faltar.
+      - name: Aceitar licenças do Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
       - name: Instalar dependências
         run: npm ci
