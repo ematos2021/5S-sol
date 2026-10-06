@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../services/supabase';
 import { getUsuario } from '../services/usuario';
 import { compressImage } from '../services/imageCompressor';
-import { gerarResumoExecutivo } from '../services/ia';
 import { entregarRelatorio } from '../services/relatorio';
 import {
     SENSOS, ESCALA_5S, scores5S, SOL_PILARES, scoresSOL, scoresIntegrado, indiceSolar, solSelo,
@@ -21,11 +20,6 @@ const ACCENT = '#22C55E';
 const SOL_ACCENT = '#F59E0B';
 // Lookup unificado de dimensões (5S + SOL) para plano de ação e relatório
 const DIM_BY_ID = Object.fromEntries([...SENSOS, ...SOL_PILARES].map(d => [d.id, d]));
-
-// O resumo por IA passa por uma Edge Function do Supabase. A chave do Gemini é
-// cobrada por uso e ficava aqui, legível para quem abrisse o código-fonte da
-// página ou descompactasse o APK — que é um zip. Ver src/services/ia.js.
-const gerarResumoIA5S = (aud, sc, scSol, solar) => gerarResumoExecutivo(aud, sc, scSol, solar);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const hojeISO = () => new Date().toISOString().slice(0, 10);
@@ -460,7 +454,6 @@ function montarRelatorio5S(aud, historico = []) {
         return `<tr style="${renov && !done ? 'background:#fff7ed' : ''}"><td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;${renov && !done ? 'border-left:3px solid #dc2626' : ''}"><span style="font-size:10px;font-weight:900;color:#fff;background:${tinta(s.cor)};padding:2px 7px;border-radius:8px">${s.num}</span></td>
         <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;font-size:11px">${esc(pl.descricao) || '—'}${renov ? `<div style="font-size:9.5px;font-weight:900;letter-spacing:.3px;color:${done ? VERDE : '#b91c1c'};margin-top:2px">RENOVADA · ${vez}ª VEZ · pendente desde ${fmtData(pl.origem.data)}${pl.origem.prazo ? ` · prazo original ${fmtData(pl.origem.prazo)}` : ''}</div>` : ''}</td>
         <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-size:11px">${esc(pl.resp) || '—'}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;text-align:center;font-size:11px">${pl.prazo ? fmtData(pl.prazo) : '—'}</td>
         <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;text-align:center"><span style="font-size:10px;font-weight:800;padding:2px 9px;border-radius:9px;background:${done ? '#dcfce7' : '#fef3c7'};color:${tinta(done ? '#16a34a' : '#d97706', 5.5)}">${done ? 'CONCLUÍDA' : 'ABERTA'}</span></td></tr>`;
     }).join('');
 
@@ -553,7 +546,6 @@ function montarRelatorio5S(aud, historico = []) {
             <td style="${tdH};text-align:center"><span style="font-size:9.5px;font-weight:900;color:#fff;background:${tinta(s.cor)};padding:2px 6px;border-radius:8px">${s.num}</span></td>
             <td style="${tdH};font-weight:700">${esc(p.descricao) || '—'}</td>
             <td style="${tdH}">${esc(p.resp) || '—'}</td>
-            <td style="${tdH};text-align:center;white-space:nowrap">${p.prazo ? fmtData(p.prazo) : '—'}</td>
             <td style="${tdH};text-align:center"><span style="font-size:9.5px;font-weight:800;padding:2px 8px;border-radius:9px;background:${fundo};color:${cor};white-space:nowrap">${rotulo}</span></td></tr>`;
         }).join('');
 
@@ -580,7 +572,7 @@ function montarRelatorio5S(aud, historico = []) {
             <thead><tr style="background:#f1f5f9">
                 <th style="${thH};text-align:left">Auditoria</th><th style="${thH}">Pilar</th>
                 <th style="${thH};text-align:left">Ação</th><th style="${thH};text-align:left">Responsável</th>
-                <th style="${thH}">Prazo</th><th style="${thH}">Situação</th></tr></thead>
+                <th style="${thH}">Situação</th></tr></thead>
             <tbody>${linhasAcoes}</tbody></table>` : ''}`;
     })();
 
@@ -669,7 +661,7 @@ function montarRelatorio5S(aud, historico = []) {
 
         ${planos.length ? h2(`Plano de Ação 5S + SOL (${planos.length - planosAbertos.length}/${planos.length} concluídas${renovadas.length ? ` · ${renovadas.length} renovada(s) de auditoria anterior` : ''})`) + `
         <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0">
-            <thead><tr style="background:#f1f5f9"><th style="padding:6px 10px;font-size:10px;color:#475569">Pilar</th><th style="padding:6px 10px;font-size:10px;text-align:left;color:#475569">Ação</th><th style="padding:6px 10px;font-size:10px;text-align:left;color:#475569">Responsável</th><th style="padding:6px 10px;font-size:10px;color:#475569">Prazo</th><th style="padding:6px 10px;font-size:10px;color:#475569">Status</th></tr></thead>
+            <thead><tr style="background:#f1f5f9"><th style="padding:6px 10px;font-size:10px;color:#475569">Pilar</th><th style="padding:6px 10px;font-size:10px;text-align:left;color:#475569">Ação</th><th style="padding:6px 10px;font-size:10px;text-align:left;color:#475569">Responsável</th><th style="padding:6px 10px;font-size:10px;color:#475569">Status</th></tr></thead>
             <tbody>${planoRows}</tbody></table>` : ''}
 
         ${historicoSecao}
@@ -758,10 +750,6 @@ const Auditoria5S = ({ aud, onClose, onSave, saving, historico = [] }) => {
     const [fotos, setFotos] = useState(aud.fotos || {});
     const [planos, setPlanos] = useState(aud.planos || []);
     const [analiseIa, setAnaliseIa] = useState(aud.analise_ia || '');
-    const [iaLoading, setIaLoading] = useState(false);
-    const [iaEditing, setIaEditing] = useState(false);
-    const [iaDraft, setIaDraft] = useState('');
-    const [iaErr, setIaErr] = useState('');
     const [infoItem, setInfoItem] = useState(null);
     const [relViewer, abrirRelatorio] = useRelatorioViewer();
     const fileRefs = useRef({});
@@ -809,15 +797,6 @@ const Auditoria5S = ({ aud, onClose, onSave, saving, historico = [] }) => {
             score: sc.geral, scores: scoresIntegrado(respostas), // 5S + SOL + solar no jsonb
             status: concluir ? 'concluida' : aud.status,
         });
-    };
-
-    const gerarResumo = async () => {
-        setIaLoading(true); setIaErr('');
-        try {
-            const novo = await gerarResumoIA5S({ ...aud, respostas, observacoes, planos }, sc, scSol, solar);
-            setAnaliseIa(novo); setIaEditing(false);
-        } catch (e) { console.error(e); setIaErr('O Assistente IA não conseguiu gerar agora. Tente novamente.'); }
-        finally { setIaLoading(false); }
     };
 
     // Render de um grupo avaliável (senso do 5S OU pilar do SOL) — mesma UX
@@ -960,44 +939,6 @@ const Auditoria5S = ({ aud, onClose, onSave, saving, historico = [] }) => {
                 </div>
                 {SOL_PILARES.map(pilar => renderGrupo(pilar, scSol[pilar.id]))}
 
-                {/* ── Resumo Executivo (IA) — sai no relatório ── */}
-                <div style={{ marginBottom: '1.2rem', borderRadius: 12, border: `1px solid ${ACCENT}44`, background: `linear-gradient(160deg, ${ACCENT}0d, transparent 60%)`, padding: '0.9rem 1rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.7rem' }}>
-                        <div style={{ width: 32, height: 32, borderRadius: 8, background: `${ACCENT}22`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><FaRobot color={ACCENT} size={15} /></div>
-                        <div style={{ flex: 1, minWidth: 130 }}>
-                            <div style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--color-text-main)' }}>Resumo Executivo</div>
-                            <div style={{ fontSize: '0.62rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>Gerado por IA · editável · sai no relatório</div>
-                        </div>
-                        {!iaEditing && !iaLoading && (
-                            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                                {analiseIa && <button onClick={() => { setIaDraft(analiseIa); setIaEditing(true); }} style={{ ...btnSec, fontSize: '0.68rem', padding: '0.3rem 0.7rem' }}><FaPen size={10} /> Editar</button>}
-                                <button onClick={gerarResumo} style={{ ...btnPrim, fontSize: '0.72rem', padding: '0.4rem 0.85rem' }}><FaMagic size={11} /> {analiseIa ? 'Regenerar' : 'Gerar com IA'}</button>
-                            </div>
-                        )}
-                    </div>
-                    {iaErr && <div style={{ fontSize: '0.7rem', color: '#DC2626', marginBottom: '0.5rem' }}>{iaErr}</div>}
-                    {iaLoading ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 0.3rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}><FaSpinner className="spin" color={ACCENT} /> O Assistente IA está analisando a auditoria…</div>
-                    ) : iaEditing ? (
-                        <div>
-                            <textarea value={iaDraft} onChange={e => setIaDraft(e.target.value)} rows={6}
-                                style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg-app)', border: '1px solid var(--border-color-dark)', borderRadius: 8, color: 'var(--color-text-main)', fontSize: '0.82rem', lineHeight: 1.6, padding: '0.6rem 0.8rem', resize: 'vertical', fontFamily: 'inherit' }} />
-                            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                                <button onClick={() => { setAnaliseIa(iaDraft.trim()); setIaEditing(false); }} style={{ ...btnPrim, fontSize: '0.72rem', padding: '0.4rem 0.9rem', background: '#16A34A', color: '#fff' }}><FaSave size={11} /> Aplicar</button>
-                                <button onClick={() => setIaEditing(false)} style={{ ...btnSec, fontSize: '0.7rem', padding: '0.4rem 0.8rem' }}><FaTimes size={11} /> Cancelar</button>
-                            </div>
-                        </div>
-                    ) : analiseIa ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                            {analiseIa.split(/\n{2,}/).map(p => p.trim()).filter(Boolean).map((p, i) => (
-                                <p key={i} style={{ margin: 0, fontSize: '0.84rem', lineHeight: 1.6, color: 'var(--color-text-main)' }}>{p}</p>
-                            ))}
-                        </div>
-                    ) : (
-                        <div style={{ fontSize: '0.78rem', color: 'var(--color-text-muted)' }}>Clique em <b>Gerar com IA</b> para um resumo do resultado (5S + SOL) — você pode editar antes de sair no relatório.</div>
-                    )}
-                </div>
-
                 {/* Pendências das auditorias anteriores — renovar o que não foi feito */}
                 {pendenciasAnteriores.length > 0 && (
                     <div style={{ marginBottom: '1rem' }}>
@@ -1017,7 +958,7 @@ const Auditoria5S = ({ aud, onClose, onSave, saving, historico = [] }) => {
                                     <div style={{ flex: 1, minWidth: 180 }}>
                                         <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--color-text-main)' }}>{p.descricao || '—'}</div>
                                         <div style={{ fontSize: '0.64rem', color: 'var(--color-text-subtle)', marginTop: '0.1rem' }}>
-                                            auditoria de {fmtData(a.data_auditoria)} · {p.resp || 'sem responsável'} · prazo {p.prazo ? fmtData(p.prazo) : '—'}
+                                            auditoria de {fmtData(a.data_auditoria)} · {p.resp || 'sem responsável'}{p.prazo ? ` · prazo ${fmtData(p.prazo)}` : ''}
                                             {atrasada && <span style={{ color: '#DC2626', fontWeight: 800 }}> · VENCIDA</span>}
                                         </div>
                                     </div>
@@ -1041,7 +982,7 @@ const Auditoria5S = ({ aud, onClose, onSave, saving, historico = [] }) => {
                         const s = DIM_BY_ID[pl.senso] || SENSOS[0];
                         const done = pl.status === 'concluida';
                         return (
-                            <div key={pl.id} style={{ background: pl.origem && !done ? 'rgba(220,38,38,0.07)' : 'var(--bg-surface-glass)', border: `1px solid ${done ? '#16A34A44' : pl.origem ? '#DC262655' : 'var(--border-color-dark)'}`, borderLeft: `4px solid ${s.cor}`, borderRadius: 10, padding: '0.65rem 0.8rem', marginBottom: '0.5rem', opacity: done ? 0.75 : 1, display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'auto 2fr 1fr 0.9fr auto auto', gap: '0.5rem', alignItems: 'end' }}>
+                            <div key={pl.id} style={{ background: pl.origem && !done ? 'rgba(220,38,38,0.07)' : 'var(--bg-surface-glass)', border: `1px solid ${done ? '#16A34A44' : pl.origem ? '#DC262655' : 'var(--border-color-dark)'}`, borderLeft: `4px solid ${s.cor}`, borderRadius: 10, padding: '0.65rem 0.8rem', marginBottom: '0.5rem', opacity: done ? 0.75 : 1, display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'auto 2fr 1fr auto auto', gap: '0.5rem', alignItems: 'end' }}>
                                 {pl.origem && (
                                     <div style={{ gridColumn: '1 / -1', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '0.5px', color: done ? '#16A34A' : '#F87171' }}>
                                         RENOVADA · {Number(pl.vez) || 2}ª VEZ · PENDENTE DESDE {fmtData(pl.origem.data)}{pl.origem.prazo ? ` · PRAZO ORIGINAL ${fmtData(pl.origem.prazo)}` : ''}
@@ -1054,7 +995,6 @@ const Auditoria5S = ({ aud, onClose, onSave, saving, historico = [] }) => {
                                     </select></div>
                                 <div><label style={labelSty}>Ação</label><input style={inputSty} value={pl.descricao} onChange={e => setPlanos(p => p.map(x => x.id === pl.id ? { ...x, descricao: e.target.value } : x))} /></div>
                                 <div><label style={labelSty}>Responsável</label><input style={inputSty} value={pl.resp} onChange={e => setPlanos(p => p.map(x => x.id === pl.id ? { ...x, resp: e.target.value } : x))} /></div>
-                                <div><label style={labelSty}>Prazo</label><input type="date" style={inputSty} value={pl.prazo || ''} onChange={e => setPlanos(p => p.map(x => x.id === pl.id ? { ...x, prazo: e.target.value } : x))} /></div>
                                 <button onClick={() => setPlanos(p => p.map(x => x.id === pl.id ? { ...x, status: done ? 'aberta' : 'concluida' } : x))}
                                     style={{ padding: '0.45rem 0.7rem', borderRadius: 7, border: 'none', background: done ? '#16A34A' : '#D97706', color: '#fff', fontSize: '0.66rem', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}>{done ? '✓ Feita' : 'Concluir'}</button>
                                 <button onClick={() => setPlanos(p => p.filter(x => x.id !== pl.id))} style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', padding: '0.35rem', justifySelf: 'end' }}><FaTrash size={11} /></button>
