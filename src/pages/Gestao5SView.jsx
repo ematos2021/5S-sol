@@ -105,6 +105,46 @@ const historicoDaMaquina = (aud, todas, limite = 4) => {
         .slice(0, limite);
 };
 
+// Ordem natural: "CUP90-9" antes de "CUP90-13", "FÁBRICA 2" antes de "FÁBRICA 10".
+const natural = (a, b) => String(a ?? '').localeCompare(String(b ?? ''), 'pt-BR', { numeric: true, sensitivity: 'base' });
+
+// Critérios que pontuam (os 24). É contra eles que o "Concluir" é liberado.
+const ITENS_ATIVOS = [...SENSOS, ...SOL_PILARES].flatMap(g =>
+    g.itens.filter(it => !it.emAvaliacao && !it.desabilitado).map(it => ({ ...it, grupo: g })));
+// O que ainda falta avaliar numa auditoria — é o que prende um rascunho.
+const faltantesDe = (a) => ITENS_ATIVOS.filter(it => a?.respostas?.[it.id] == null || a.respostas[it.id] === '');
+
+// ── Ações já feitas (para replicar) ─────────────────────────────────────────────
+// O auditor escreve a mesma ação em máquina após máquina ("Indicadores
+// desatualizados" saiu digitado à mão em 18 auditorias seguidas). Este catálogo
+// junta as ações já registradas, por pilar, para virar um toque na próxima.
+// A chave ignora acento, caixa, pontuação e plural — "Indicador desatualizado."
+// e "Indicadores desatualizados" são a mesma ação.
+const chaveAcao = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean)
+    .map(w => (w.length <= 3 ? w : w.replace(/oes$/, 'ao').replace(/([rzs])es$/, '$1').replace(/s$/, ''))).join(' ');
+const catalogoAcoes = (auditorias) => {
+    const m = new Map();
+    (auditorias || []).forEach(a => (a.planos || []).forEach(p => {
+        const g = DIM_BY_ID[p.senso];
+        let desc = String(p.descricao || '').trim();
+        // "Gerar ação" pré-preenche "Critério: " — sem texto depois, não é ação.
+        const prefixo = g?.itens.find(it => desc.toLowerCase().startsWith(`${it.label.toLowerCase()}:`));
+        if (prefixo && !desc.slice(prefixo.label.length + 1).trim()) return;
+        desc = desc.replace(/[\s.]+$/, '');
+        const k = `${p.senso}|${chaveAcao(desc)}`;
+        if (!desc || !chaveAcao(desc)) return;
+        if (!m.has(k)) m.set(k, { k, senso: p.senso, descricao: desc, resp: '', data: '', itens: new Set(), areas: new Set() });
+        const e = m.get(k);
+        const d = String(a.data_auditoria || '');
+        if (d >= e.data) { e.data = d; e.descricao = desc; if (String(p.resp || '').trim()) e.resp = String(p.resp).trim(); }
+        if (!e.resp && String(p.resp || '').trim()) e.resp = String(p.resp).trim();
+        if (p.item) e.itens.add(p.item);
+        e.areas.add(areaKey(a));
+    }));
+    return [...m.values()];
+};
+
 // ── Cor no papel ────────────────────────────────────────────────────────────────
 // A paleta é desenhada para tela escura. No relatório impresso ela encosta no branco
 // e some: âmbar #FBBF24 com texto branco em cima dá 1,7:1 de contraste, e a nota 4
@@ -743,7 +783,7 @@ const useRelatorioViewer = () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 //  WORKSPACE DA AUDITORIA (overlay em tela cheia)
 // ═══════════════════════════════════════════════════════════════════════════════
-const Auditoria5S = ({ aud, onClose, onSave, saving, historico = [] }) => {
+const Auditoria5S = ({ aud, onClose, onSave, saving, historico = [], acoesFeitas = [] }) => {
     const isMobile = useIsMobile();
     const [respostas, setRespostas] = useState(aud.respostas || {});
     const [observacoes, setObservacoes] = useState(aud.observacoes || {});
@@ -776,6 +816,21 @@ const Auditoria5S = ({ aud, onClose, onSave, saving, historico = [] }) => {
         vez: (Number(p.vez) || 1) + 1,
         origem: { plano_id: p.id, auditoria_id: a.id, data: a.data_auditoria, prazo: p.prazo || null },
     }]);
+
+    // Ações já feitas em outras auditorias para este critério: primeiro as que
+    // nasceram dele, depois as do mesmo pilar, as mais repetidas no topo. Some
+    // da lista o que já está neste plano.
+    const sugestoesPara = (g, it) => {
+        const noPlano = new Set(planos.map(p => `${p.senso}|${chaveAcao(p.descricao)}`));
+        return acoesFeitas
+            .filter(x => x.senso === g.id && !noPlano.has(x.k))
+            .sort((a, b) => (b.itens.has(it.id) - a.itens.has(it.id)) || (b.areas.size - a.areas.size) || b.data.localeCompare(a.data))
+            .slice(0, 4);
+    };
+    const replicarAcao = (g, it, x) => setPlanos(p => [...p, { id: uid(), senso: g.id, item: it.id, descricao: x.descricao, resp: x.resp, prazo: '', status: 'aberta' }]);
+
+    const faltantes = ITENS_ATIVOS.filter(it => respostas[it.id] == null || respostas[it.id] === '');
+    const irPara = (itemId) => document.getElementById(`crit-${itemId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
     const setNota = (itemId, n) => setRespostas(p => ({ ...p, [itemId]: p[itemId] === n ? null : n }));
     const capture = async (itemId, e) => {
@@ -812,8 +867,10 @@ const Auditoria5S = ({ aud, onClose, onSave, saving, historico = [] }) => {
                 const emAvaliacao = Boolean(it.emAvaliacao || it.desabilitado);
                 const nota = respostas[it.id];
                 const critico = !emAvaliacao && nota != null && nota <= 2;
+                const fts = fotos[it.id] || [];
+                const sugestoes = critico ? sugestoesPara(g, it) : [];
                 return (
-                    <div key={it.id} style={{ background: 'var(--bg-surface-glass)', border: `1px solid ${critico ? '#DC262655' : 'var(--border-color-dark)'}`, borderRadius: 10, padding: '0.7rem 0.85rem', marginBottom: '0.55rem', opacity: emAvaliacao ? 0.9 : 1 }}>
+                    <div key={it.id} id={`crit-${it.id}`} style={{ background: 'var(--bg-surface-glass)', border: `1px solid ${critico ? '#DC262655' : 'var(--border-color-dark)'}`, borderRadius: 10, padding: '0.7rem 0.85rem', marginBottom: '0.55rem', opacity: emAvaliacao ? 0.9 : 1, scrollMarginTop: 80 }}>
                         <div style={{ display: 'flex', alignItems: isMobile ? 'stretch' : 'center', gap: isMobile ? '0.5rem' : '0.9rem', flexDirection: isMobile ? 'column' : 'row' }}>
                             <div style={{ flex: 1, minWidth: 0 }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
@@ -849,24 +906,40 @@ const Auditoria5S = ({ aud, onClose, onSave, saving, historico = [] }) => {
                                         <button key={n} onClick={() => setNota(it.id, n)} title={`${n} · ${ESCALA_5S[n].rotulo}: ${ESCALA_5S[n].desc}`}
                                             style={{ flex: isMobile ? 1 : 'none', width: isMobile ? 'auto' : 38, height: isMobile ? 42 : 36, borderRadius: 8, border: `1.5px solid ${nota === n ? notaCor(n) : 'var(--border-color-dark)'}`, background: nota === n ? notaCor(n) : 'transparent', color: nota === n ? '#fff' : 'var(--color-text-muted)', fontSize: '0.82rem', fontWeight: 900, cursor: 'pointer', transition: 'all 0.12s' }}>{n}</button>
                                     ))}
+                                    {/* Evidência: foto em qualquer nota, não só no desvio — justifica o 5 tanto quanto o 1 */}
+                                    <input ref={el => fileRefs.current[it.id] = el} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => capture(it.id, e)} />
+                                    <button onClick={() => fileRefs.current[it.id]?.click()} title="Foto de evidência deste critério"
+                                        style={{ flex: isMobile ? 1 : 'none', width: isMobile ? 'auto' : 38, height: isMobile ? 42 : 36, borderRadius: 8, marginLeft: isMobile ? 0 : '0.25rem', border: `1.5px solid ${fts.length ? '#3B82F6' : 'var(--border-color-dark)'}`, background: fts.length ? '#3B82F622' : 'transparent', color: fts.length ? '#60A5FA' : 'var(--color-text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.2rem', fontSize: '0.66rem', fontWeight: 900 }}>
+                                        <FaCamera size={12} />{fts.length > 0 && fts.length}
+                                    </button>
                                 </div>
                             )}
                         </div>
+                        {fts.length > 0 && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap', marginTop: '0.55rem' }}>
+                                {fts.map((src, idx) => (
+                                    <div key={idx} style={{ position: 'relative' }}>
+                                        <img src={src} alt="" style={{ width: 42, height: 42, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border-color-dark)' }} />
+                                        <button onClick={() => setFotos(p => ({ ...p, [it.id]: p[it.id].filter((_, i) => i !== idx) }))} style={{ position: 'absolute', top: -6, right: -6, width: 17, height: 17, borderRadius: '50%', background: '#DC2626', border: 'none', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><FaTimes size={7} /></button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                         {critico && (
                             <div style={{ marginTop: '0.6rem', display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
                                 <textarea value={observacoes[it.id] || ''} onChange={e => setObservacoes(p => ({ ...p, [it.id]: e.target.value }))}
                                     placeholder="Descreva o desvio encontrado (nota ≤ 2)…" rows={2}
                                     style={{ width: '100%', background: 'var(--bg-app)', border: '1px solid #DC262644', borderRadius: 8, padding: '0.5rem 0.7rem', color: 'var(--color-text-main)', fontSize: '0.76rem', resize: 'vertical', outline: 'none' }} />
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap' }}>
-                                    <input ref={el => fileRefs.current[it.id] = el} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => capture(it.id, e)} />
-                                    <button onClick={() => fileRefs.current[it.id]?.click()} style={{ ...btnSec, fontSize: '0.7rem', padding: '0.32rem 0.7rem' }}><FaCamera size={10} /> Foto</button>
-                                    {(fotos[it.id] || []).map((src, idx) => (
-                                        <div key={idx} style={{ position: 'relative' }}>
-                                            <img src={src} alt="" style={{ width: 42, height: 42, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border-color-dark)' }} />
-                                            <button onClick={() => setFotos(p => ({ ...p, [it.id]: p[it.id].filter((_, i) => i !== idx) }))} style={{ position: 'absolute', top: -6, right: -6, width: 17, height: 17, borderRadius: '50%', background: '#DC2626', border: 'none', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><FaTimes size={7} /></button>
-                                        </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                                    <button onClick={() => setPlanos(p => [...p, { id: uid(), senso: g.id, item: it.id, descricao: `${it.label}: `, resp: '', prazo: '', status: 'aberta' }])} style={{ ...btnSec, fontSize: '0.7rem', padding: '0.32rem 0.7rem', borderColor: '#D9770666', color: '#D97706' }}><FaBolt size={10} /> Gerar ação</button>
+                                    {sugestoes.map(x => (
+                                        <button key={x.k} onClick={() => replicarAcao(g, it, x)} title={`Replicar: já registrada em ${x.areas.size} linha(s)/máquina(s)${x.resp ? ` · responsável ${x.resp}` : ''}`}
+                                            style={{ ...btnSec, fontSize: '0.68rem', padding: '0.3rem 0.65rem', maxWidth: '100%', borderStyle: 'dashed' }}>
+                                            <FaSync size={9} style={{ flexShrink: 0 }} />
+                                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.descricao}</span>
+                                            <span style={{ color: 'var(--color-text-subtle)', fontWeight: 600, flexShrink: 0 }}>{x.resp ? `${x.resp} · ` : ''}{x.areas.size}×</span>
+                                        </button>
                                     ))}
-                                    <button onClick={() => setPlanos(p => [...p, { id: uid(), senso: g.id, descricao: `${it.label}: `, resp: '', prazo: '', status: 'aberta' }])} style={{ ...btnSec, fontSize: '0.7rem', padding: '0.32rem 0.7rem', borderColor: '#D9770666', color: '#D97706' }}><FaBolt size={10} /> Gerar ação</button>
                                 </div>
                             </div>
                         )}
@@ -974,9 +1047,28 @@ const Auditoria5S = ({ aud, onClose, onSave, saving, historico = [] }) => {
 
                 {/* Plano de ação 5S + SOL */}
                 <div style={{ marginBottom: '1rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.6rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '0.72rem', fontWeight: 800, letterSpacing: '1px', textTransform: 'uppercase', color: '#D97706', display: 'flex', alignItems: 'center', gap: '0.4rem' }}><FaClipboardCheck size={11} /> Plano de Ação 5S + SOL ({planos.length})</span>
                         <button onClick={() => setPlanos(p => [...p, { id: uid(), senso: 'seiri', descricao: '', resp: '', prazo: '', status: 'aberta' }])} style={{ ...btnSec, fontSize: '0.68rem', padding: '0.3rem 0.7rem' }}><FaPlus size={9} /> Adicionar</button>
+                        {(() => {
+                            const noPlano = new Set(planos.map(p => `${p.senso}|${chaveAcao(p.descricao)}`));
+                            const livres = acoesFeitas.filter(x => !noPlano.has(x.k));
+                            if (!livres.length) return null;
+                            return (
+                                <select value="" onChange={e => { const x = livres.find(y => y.k === e.target.value); if (x) setPlanos(p => [...p, { id: uid(), senso: x.senso, descricao: x.descricao, resp: x.resp, prazo: '', status: 'aberta' }]); }}
+                                    style={{ ...inputSty, width: 'auto', maxWidth: 240, padding: '0.3rem 0.5rem', fontSize: '0.68rem', fontWeight: 700 }}>
+                                    <option value="">↻ Replicar ação já feita…</option>
+                                    {[...SENSOS, ...SOL_PILARES].map(g => {
+                                        const daqui = livres.filter(x => x.senso === g.id).sort((a, b) => b.areas.size - a.areas.size);
+                                        return daqui.length ? (
+                                            <optgroup key={g.id} label={`${SOL_PILARES.includes(g) ? 'SOL·' : ''}${g.num} · ${g.nome}`}>
+                                                {daqui.map(x => <option key={x.k} value={x.k}>{x.descricao}{x.resp ? ` — ${x.resp}` : ''} ({x.areas.size}×)</option>)}
+                                            </optgroup>
+                                        ) : null;
+                                    })}
+                                </select>
+                            );
+                        })()}
                     </div>
                     {planos.map(pl => {
                         const s = DIM_BY_ID[pl.senso] || SENSOS[0];
@@ -1008,7 +1100,18 @@ const Auditoria5S = ({ aud, onClose, onSave, saving, historico = [] }) => {
             {/* Rodapé */}
             <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: isMobile ? '0.7rem 0.8rem' : '0.85rem 1.2rem', borderTop: '1px solid var(--border-color-dark)', background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', gap: '0.7rem', flexWrap: 'wrap' }}>
                 <div style={{ flex: isMobile ? '1 1 100%' : 1, fontSize: '0.7rem', color: 'var(--color-text-muted)', order: isMobile ? -1 : 0, display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-                    {respondidos === totalItens ? <span style={{ color: '#16A34A', fontWeight: 700 }}>✓ Tudo avaliado · 5S {sc.geral}% · SOL {scSol.geral}%</span> : <span>Faltam {totalItens - respondidos} critérios</span>}
+                    {respondidos === totalItens ? <span style={{ color: '#16A34A', fontWeight: 700 }}>✓ Tudo avaliado · 5S {sc.geral}% · SOL {scSol.geral}%</span> : (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                            <span style={{ color: '#F87171', fontWeight: 800 }}>Para concluir, falta{faltantes.length > 1 ? 'm' : ''} {faltantes.length}:</span>
+                            {faltantes.slice(0, 4).map(it => (
+                                <button key={it.id} onClick={() => irPara(it.id)} title="Ir até o critério"
+                                    style={{ background: 'none', border: '1px solid #DC262655', borderRadius: 6, padding: '0.1rem 0.45rem', color: 'var(--color-text-main)', fontSize: '0.64rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                    <b style={{ color: it.grupo.cor }}>{it.grupo.num}</b> {it.label}
+                                </button>
+                            ))}
+                            {faltantes.length > 4 && <span>+{faltantes.length - 4}</span>}
+                        </span>
+                    )}
                     <SolSeloPill value={solar} />
                 </div>
                 <button onClick={() => abrirRelatorio(montarRelatorio5S({ ...aud, respostas, observacoes, fotos, planos, score: sc.geral, scores: scoresIntegrado(respostas) }, historico))}
@@ -1074,6 +1177,7 @@ export default function Gestao5SView() {
     const [pAte, setPAte] = useState('');
     const [openSetores, setOpenSetores] = useState(() => new Set()); // setores expandidos no mapa (recolhidos por padrão)
     const toggleSetor = (k) => setOpenSetores(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
+    const [buscaMapa, setBuscaMapa] = useState('');
     const [collapsedAud, setCollapsedAud] = useState(() => new Set()); // setores recolhidos na aba Auditorias (abertos por padrão)
     const toggleAud = (k) => setCollapsedAud(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
     const [relViewer, abrirRelatorio] = useRelatorioViewer();
@@ -1238,8 +1342,15 @@ export default function Gestao5SView() {
             });
         const ult = hist[0] || null;
         const ant = hist[1] || null;
+        // Rascunho mais novo que a última concluída: a máquina FOI visitada, só
+        // não fechou. Fica visível no mapa como rascunho — sem entrar em média,
+        // KPI nem rotina semanal, que continuam contando só auditoria concluída.
+        const rasc = auditoriasFiltradas
+            .filter(a => a.status !== 'concluida' && areaKey(a) === areaKey(area) && (!ult || String(a.data_auditoria || '') >= String(ult.data_auditoria || '')))
+            .sort((a, b) => String(b.data_auditoria || '').localeCompare(String(a.data_auditoria || '')) || (b.id || 0) - (a.id || 0))[0] || null;
         const acoesAbertas = hist.reduce((s, a) => s + (a.planos || []).filter(p => p.status !== 'concluida').length, 0);
-        return { ...area, ult, ant, hist, acoesAbertas, delta: (ult && ant && ult.score != null && ant.score != null) ? Math.round(ult.score - ant.score) : null };
+        const sU = ult ? solarDe(ult) : null, sA = ant ? solarDe(ant) : null;
+        return { ...area, ult, ant, hist, rasc, acoesAbertas, delta: (sU != null && sA != null) ? Math.round(sU - sA) : null };
     }).sort((a, b) => (a.ult?.score ?? -1) - (b.ult?.score ?? -1));
 
     // Mapa agrupado por setor (linhas/máquinas ficam dentro do setor)
@@ -1285,6 +1396,58 @@ export default function Gestao5SView() {
         })).sort((a, b) => ts(b.itens[0]) - ts(a.itens[0]));
     })();
 
+    // Rotina semanal: conta todas as auditorias concluídas, independente do filtro de período
+    const semanas = indexarSemanas(auditorias);
+    const semanaAgora = semanaAtualKey();
+    const pendenteSemana = (m) => !semanas.get(areaKey(m))?.has(semanaAgora);
+
+    // ── Mapa em árvore, numerado como plano de contas ───────────────────────────
+    // 1 Setor → 1.1 Fábrica → 1.1.01 Linha/Máquina. Fechado, o mapa inteiro cabe
+    // em meia dúzia de linhas; cada nível mostra só o resumo do que tem dentro.
+    // Setor que já teve visita sobe para o topo; dentro dele a ordem é natural
+    // (CUP90-9 antes de CUP90-13), para o código de cada máquina não mudar de
+    // uma semana para a outra conforme a nota sobe ou desce.
+    const arvoreMapa = (() => {
+        const q = norm(buscaMapa);
+        const resumo = (itens) => {
+            const aud = itens.filter(i => i.ult);
+            return {
+                total: itens.length,
+                auditadas: aud.length,
+                mediaSolar: aud.length ? Math.round(aud.reduce((s, i) => s + (solarDe(i.ult) ?? 0), 0) / aud.length) : null,
+                pendentes: itens.filter(pendenteSemana).length,
+                rascunhos: itens.filter(i => i.rasc).length,
+                acoes: itens.reduce((s, i) => s + (i.acoesAbertas || 0), 0),
+            };
+        };
+        const setores = new Map();
+        mapa.forEach(m => {
+            const sk = norm(m.setor);
+            if (!setores.has(sk)) setores.set(sk, { k: `S:${sk}`, nome: m.setor, fabs: new Map() });
+            const fk = `${norm(m.planta)}|${norm(m.fabrica)}`;
+            const fabs = setores.get(sk).fabs;
+            if (!fabs.has(fk)) fabs.set(fk, { k: `F:${sk}|${fk}`, planta: m.planta, fabrica: m.fabrica, itens: [] });
+            fabs.get(fk).itens.push(m);
+        });
+        const visitado = (s) => [...s.fabs.values()].some(f => f.itens.some(i => i.ult || i.rasc)) ? 1 : 0;
+        return [...setores.values()]
+            .sort((a, b) => (visitado(b) - visitado(a)) || natural(a.nome, b.nome))
+            .map((s, i) => {
+                const fabs = [...s.fabs.values()]
+                    .sort((a, b) => natural(a.fabrica, b.fabrica) || natural(a.planta, b.planta))
+                    .map((f, j) => {
+                        const itens = [...f.itens]
+                            .sort((a, b) => (a.maquina ? 1 : 0) - (b.maquina ? 1 : 0) || natural(a.maquina, b.maquina))
+                            .map((m, n) => ({ ...m, cod: `${i + 1}.${j + 1}.${String(n + 1).padStart(2, '0')}` }));
+                        const visiveis = q ? itens.filter(m => `${norm(s.nome)} ${norm(f.fabrica)} ${norm(m.maquina || 'SETOR INTEIRO')} ${m.cod}`.includes(q)) : itens;
+                        return { ...f, cod: `${i + 1}.${j + 1}`, itens, visiveis, ...resumo(itens) };
+                    });
+                return { ...s, cod: `${i + 1}`, fabs: fabs.filter(f => f.visiveis.length), ...resumo(fabs.flatMap(f => f.itens)) };
+            })
+            .filter(s => s.fabs.length);
+    })();
+    const chavesArvore = arvoreMapa.flatMap(s => [s.k, ...s.fabs.map(f => f.k)]);
+
     // ── Comparativo de evolução: auditorias marcadas nos cards ───────────────
     const audsSelecionadas = auditorias.filter(a => selecao.has(a.id));
     // Com uma só marcada, o atalho traz o histórico inteiro daquela linha/máquina
@@ -1297,10 +1460,6 @@ export default function Gestao5SView() {
     const auditadas = mapa.filter(m => m.ult);
     const mediaGeral = auditadas.length ? Math.round(auditadas.reduce((s, m) => s + (m.ult.score || 0), 0) / auditadas.length) : null;
     const acoesAbertasTot = auditoriasFiltradas.reduce((s, a) => s + (a.planos || []).filter(p => p.status !== 'concluida').length, 0);
-    // Rotina semanal: conta todas as auditorias concluídas, independente do filtro de período
-    const semanas = indexarSemanas(auditorias);
-    const semanaAgora = semanaAtualKey();
-    const pendenteSemana = (m) => !semanas.get(areaKey(m))?.has(semanaAgora);
     const pendentesSemana = mapa.filter(pendenteSemana).length;
     const radarMedio = (() => {
         const out = {};
@@ -1400,7 +1559,7 @@ export default function Gestao5SView() {
         abrirRelatorio({ html, nomeArquivo: `Relatorio_Geral_5S_${nowStr.replace(/\//g, '-')}.html` });
     };
 
-    if (sel) return <Auditoria5S aud={sel} historico={historicoDaMaquina(sel, auditorias)} onClose={() => setSel(null)} onSave={saveAuditoria} saving={saving} />;
+    if (sel) return <Auditoria5S aud={sel} historico={historicoDaMaquina(sel, auditorias)} acoesFeitas={catalogoAcoes(auditorias)} onClose={() => setSel(null)} onSave={saveAuditoria} saving={saving} />;
 
     return (
         <div style={{ padding: isMobile ? '0.8rem' : '1rem 1.25rem', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: '0.7rem' }}>
@@ -1478,76 +1637,122 @@ export default function Gestao5SView() {
                                 <div style={{ fontSize: '0.78rem', marginTop: 4 }}>Cadastre fábricas e setores em Plantas/Moldes para o mapa 5S aparecer aqui.</div>
                             </div>
                         ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
-                                {/* Ação global: expandir / recolher todos os setores */}
-                                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                    <button onClick={() => setOpenSetores(openSetores.size >= mapaSetores.length ? new Set() : new Set(mapaSetores.map(g => `${g.planta}|${g.fabrica}|${g.setor}`)))}
-                                        style={{ ...btnSec, fontSize: '0.68rem', padding: '0.3rem 0.7rem' }}>
-                                        {openSetores.size >= mapaSetores.length ? '▾ Recolher tudo' : '▸ Expandir tudo'}
-                                    </button>
-                                </div>
-                                {mapaSetores.map(grp => {
-                                    const gKey = `${grp.planta}|${grp.fabrica}|${grp.setor}`;
-                                    const aberto = openSetores.has(gKey);
-                                    const selo = solSelo(grp.mediaSolar);
-                                    return (
-                                    <div key={gKey} className="glass-panel" style={{ borderRadius: 12, border: '1px solid var(--border-color-dark)', overflow: 'hidden' }}>
-                                        {/* Cabeçalho do setor (clicável, com % geral) */}
-                                        <button onClick={() => toggleSetor(gKey)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.75rem 0.9rem', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
-                                            <span style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', width: 12, flexShrink: 0 }}>{aberto ? '▾' : '▸'}</span>
-                                            <FaIndustry size={12} color={ACCENT} style={{ flexShrink: 0 }} />
-                                            <span style={{ fontSize: '0.82rem', fontWeight: 900, color: 'var(--color-text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{grp.fabrica} · {grp.setor}</span>
-                                            <span style={{ fontSize: '0.6rem', color: 'var(--color-text-subtle)', fontWeight: 700, flexShrink: 0 }}>{grp.planta}</span>
-                                            <div style={{ flex: 1 }} />
-                                            {(() => { const pend = grp.itens.filter(pendenteSemana).length; return pend > 0 && <span style={{ fontSize: '0.6rem', fontWeight: 800, color: '#DC2626', flexShrink: 0 }}>{pend} pendente(s) na semana</span>; })()}
-                                            {grp.acoes > 0 && <span style={{ fontSize: '0.6rem', fontWeight: 800, color: '#D97706', flexShrink: 0 }}>{grp.acoes} ação(ões)</span>}
-                                            <span style={{ fontSize: '0.6rem', fontWeight: 800, color: 'var(--color-text-muted)', background: 'var(--bg-surface-glass)', border: '1px solid var(--border-color-dark)', borderRadius: 20, padding: '0.1rem 0.55rem', flexShrink: 0 }}>{grp.auditadas}/{grp.itens.length}</span>
-                                            {/* % geral do setor */}
-                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.85rem', fontWeight: 900, color: scoreCor(grp.mediaSolar), minWidth: 54, justifyContent: 'flex-end', flexShrink: 0 }}>
-                                                {grp.mediaSolar != null ? <>{selo.emoji} {grp.mediaSolar}%</> : <span style={{ fontSize: '0.62rem', color: 'var(--color-text-subtle)', fontWeight: 700 }}>sem auditoria</span>}
-                                            </span>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                {/* Busca + expandir / recolher a árvore inteira */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                    <div style={{ ...inputSty, flex: '1 1 220px', width: 'auto', display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.35rem 0.65rem' }}>
+                                        <FaSearch size={11} color="var(--color-text-subtle)" style={{ flexShrink: 0 }} />
+                                        <input value={buscaMapa} onChange={e => setBuscaMapa(e.target.value)} placeholder="Buscar máquina, linha, fábrica ou código (ex.: 1.2.07)…"
+                                            style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: 'var(--color-text-main)', fontSize: '0.76rem' }} />
+                                        {buscaMapa && <button onClick={() => setBuscaMapa('')} style={{ background: 'none', border: 'none', color: 'var(--color-text-subtle)', cursor: 'pointer', display: 'flex', padding: 0 }}><FaTimes size={11} /></button>}
+                                    </div>
+                                    {!buscaMapa && (
+                                        <button onClick={() => setOpenSetores(chavesArvore.every(k => openSetores.has(k)) ? new Set() : new Set(chavesArvore))}
+                                            style={{ ...btnSec, fontSize: '0.68rem', padding: '0.3rem 0.7rem' }}>
+                                            {chavesArvore.every(k => openSetores.has(k)) ? '▾ Recolher tudo' : '▸ Expandir tudo'}
                                         </button>
-                                        {/* Linhas / máquinas do setor (só quando expandido) */}
-                                        {aberto && (
-                                        <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? '100%' : '240px'}, 1fr))`, gap: '0.7rem', padding: '0 0.9rem 0.9rem' }}>
-                                            {grp.itens.map(m => (
-                                                <div key={areaKey(m)} className="glass-panel" style={{ borderRadius: 12, border: `1px solid ${m.ult ? `${solSelo(solarDe(m.ult)).cor}55` : 'var(--border-color-dark)'}`, padding: '0.8rem' }}>
-                                                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem' }}>
-                                                        <div style={{ minWidth: 0 }}>
-                                                            <div style={{ fontSize: '0.86rem', fontWeight: 800, color: 'var(--color-text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.maquina || 'Setor inteiro'}</div>
-                                                            <div style={{ fontSize: '0.6rem', color: 'var(--color-text-subtle)', fontWeight: 700 }}>{m.setor}</div>
-                                                        </div>
-                                                        {m.ult ? <SolNascente value={solarDe(m.ult)} size={54} label={false} /> : <RingGauge value={null} size={42} stroke={5} />}
-                                                    </div>
-                                                    {m.ult && (
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.45rem', flexWrap: 'wrap' }}>
-                                                            <SolSeloPill value={solarDe(m.ult)} small />
-                                                            <span style={{ fontSize: '0.58rem', fontWeight: 800, color: ACCENT }}>5S {m.ult.score != null ? `${Math.round(m.ult.score)}%` : '—'}</span>
-                                                            {m.ult.scores?.sol_geral != null && <span style={{ fontSize: '0.58rem', fontWeight: 800, color: SOL_ACCENT }}>SOL {m.ult.scores.sol_geral}%</span>}
+                                    )}
+                                </div>
+
+                                {arvoreMapa.length === 0 && (
+                                    <div style={{ padding: '2rem 1rem', textAlign: 'center', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>Nada encontrado para “{buscaMapa}”.</div>
+                                )}
+
+                                {(() => {
+                                    // Resumo que se repete em cada nível: o que pede atenção primeiro, a média por último
+                                    const resumo = (r) => (
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.55rem', flexShrink: 0 }}>
+                                            {r.rascunhos > 0 && <span style={{ fontSize: '0.6rem', fontWeight: 800, color: '#D97706', whiteSpace: 'nowrap' }}>{r.rascunhos} rascunho(s)</span>}
+                                            {!isMobile && r.pendentes > 0 && <span style={{ fontSize: '0.6rem', fontWeight: 800, color: '#DC2626', whiteSpace: 'nowrap' }}>{r.pendentes} pendente(s) na semana</span>}
+                                            {!isMobile && r.acoes > 0 && <span style={{ fontSize: '0.6rem', fontWeight: 800, color: '#D97706', whiteSpace: 'nowrap' }}>{r.acoes} ação(ões)</span>}
+                                            <span title="Linhas/máquinas com auditoria concluída / total" style={{ fontSize: '0.6rem', fontWeight: 800, color: 'var(--color-text-muted)', background: 'var(--bg-surface-glass)', border: '1px solid var(--border-color-dark)', borderRadius: 20, padding: '0.1rem 0.55rem' }}>{r.auditadas}/{r.total}</span>
+                                            <span style={{ fontSize: '0.8rem', fontWeight: 900, color: scoreCor(r.mediaSolar), minWidth: 38, textAlign: 'right' }}>{r.mediaSolar != null ? `${r.mediaSolar}%` : '—'}</span>
+                                        </span>
+                                    );
+                                    const cod = (c, w) => <span style={{ fontFamily: 'ui-monospace, Consolas, monospace', fontSize: '0.68rem', fontWeight: 700, color: 'var(--color-text-subtle)', minWidth: w, flexShrink: 0 }}>{c}</span>;
+                                    const seta = (aberto) => <span style={{ fontSize: '0.66rem', color: 'var(--color-text-muted)', width: 10, flexShrink: 0 }}>{aberto ? '▾' : '▸'}</span>;
+                                    const linhaBtn = { width: '100%', display: 'flex', alignItems: 'center', gap: '0.55rem', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left' };
+
+                                    return arvoreMapa.map(s => {
+                                        const sAberto = Boolean(buscaMapa) || openSetores.has(s.k);
+                                        return (
+                                        <div key={s.k} className="glass-panel" style={{ borderRadius: 12, border: '1px solid var(--border-color-dark)', overflow: 'hidden' }}>
+                                            {/* Nível 1 — setor */}
+                                            <button onClick={() => toggleSetor(s.k)} style={{ ...linhaBtn, padding: '0.75rem 0.9rem' }}>
+                                                {seta(sAberto)}
+                                                {cod(s.cod, 14)}
+                                                <span style={{ fontSize: '0.84rem', fontWeight: 900, color: 'var(--color-text-main)', flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.nome}</span>
+                                                {resumo(s)}
+                                            </button>
+
+                                            {sAberto && s.fabs.map(f => {
+                                                const fAberto = Boolean(buscaMapa) || openSetores.has(f.k);
+                                                return (
+                                                <div key={f.k} style={{ borderTop: '1px solid var(--border-color-dark)' }}>
+                                                    {/* Nível 2 — fábrica */}
+                                                    <button onClick={() => toggleSetor(f.k)} style={{ ...linhaBtn, padding: `0.6rem 0.9rem 0.6rem ${isMobile ? '1.2rem' : '1.7rem'}` }}>
+                                                        {seta(fAberto)}
+                                                        {cod(f.cod, 28)}
+                                                        <FaIndustry size={11} color={ACCENT} style={{ flexShrink: 0 }} />
+                                                        <span style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--color-text-main)', flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                            {f.fabrica} <span style={{ fontSize: '0.6rem', color: 'var(--color-text-subtle)', fontWeight: 700 }}>{f.planta}</span>
+                                                        </span>
+                                                        {resumo(f)}
+                                                    </button>
+
+                                                    {/* Nível 3 — linhas e máquinas, uma por linha */}
+                                                    {fAberto && (
+                                                        <div style={{ padding: `0 0.9rem 0.6rem ${isMobile ? '1.2rem' : '3.2rem'}`, display: 'flex', flexDirection: 'column' }}>
+                                                            {f.visiveis.map(m => {
+                                                                const sol = m.ult ? solarDe(m.ult) : null;
+                                                                const falta = m.rasc ? faltantesDe(m.rasc) : [];
+                                                                return (
+                                                                <div key={areaKey(m)} style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: isMobile ? 'wrap' : 'nowrap', padding: '0.45rem 0', borderTop: '1px dashed var(--border-color-dark)' }}>
+                                                                    {cod(m.cod, 44)}
+                                                                    <span style={{ flex: '1 1 120px', minWidth: 0 }}>
+                                                                        <span style={{ display: 'block', fontSize: '0.78rem', fontWeight: 800, color: 'var(--color-text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.maquina || 'Setor inteiro'}</span>
+                                                                        <span style={{ display: 'block', fontSize: '0.6rem', color: 'var(--color-text-subtle)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                                            {m.ult
+                                                                                ? <>Concluída {fmtData(m.ult.data_auditoria)}{m.delta != null && <b style={{ color: m.delta >= 0 ? '#16A34A' : '#DC2626' }}> {m.delta >= 0 ? '▲' : '▼'}{Math.abs(m.delta)}</b>}{m.acoesAbertas > 0 && <span style={{ color: '#D97706' }}> · {m.acoesAbertas} ação(ões)</span>}</>
+                                                                                : <i>Nenhuma auditoria concluída</i>}
+                                                                        </span>
+                                                                    </span>
+                                                                    {/* Situação: rascunho em aberto > pendência da semana > ok */}
+                                                                    {m.rasc ? (
+                                                                        <button onClick={() => setSel(m.rasc)} title={falta.length ? `Falta avaliar: ${falta.map(it => it.label).join(' · ')}` : 'Todos os critérios avaliados — falta só concluir'}
+                                                                            style={{ flexShrink: 0, fontSize: '0.6rem', fontWeight: 800, color: '#D97706', background: '#D9770614', border: '1px solid #D9770655', borderRadius: 6, padding: '0.15rem 0.5rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                                            Rascunho {fmtCurto(m.rasc.data_auditoria)} · {falta.length ? `falta ${falta.length}` : 'concluir'}
+                                                                        </button>
+                                                                    ) : pendenteSemana(m) ? (
+                                                                        <span style={{ flexShrink: 0, fontSize: '0.6rem', fontWeight: 800, color: '#DC2626', whiteSpace: 'nowrap' }}>Pendente na semana</span>
+                                                                    ) : (
+                                                                        <span style={{ flexShrink: 0, fontSize: '0.6rem', fontWeight: 800, color: '#16A34A', whiteSpace: 'nowrap' }}>✓ Avaliada na semana</span>
+                                                                    )}
+                                                                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexShrink: 0, marginLeft: isMobile ? 'auto' : 0 }}>
+                                                                        <span title="Índice Solar da última auditoria concluída" style={{ width: 40, marginRight: '0.25rem', textAlign: 'right', fontSize: '0.8rem', fontWeight: 900, color: scoreCor(sol) }}>{sol != null ? `${Math.round(sol)}%` : '—'}</span>
+                                                                        {m.ult && (
+                                                                            <button onClick={() => abrirRelatorio(montarRelatorio5S(m.ult, historicoDaMaquina(m.ult, auditorias)))} title="Relatório da última auditoria concluída"
+                                                                                style={{ ...btnSec, padding: '0.3rem 0.5rem' }}><FaFilePdf size={11} color="#3B82F6" /></button>
+                                                                        )}
+                                                                        {m.rasc ? (
+                                                                            <button onClick={() => setSel(m.rasc)} style={{ ...btnSec, padding: '0.3rem 0.65rem', fontSize: '0.66rem', borderColor: '#D9770666', color: '#D97706' }}><FaPen size={9} /> Continuar</button>
+                                                                        ) : (
+                                                                            <button onClick={() => { setNovaPrefill({ planta: m.planta, fabrica: m.fabrica, setor: m.setor, maquina: m.maquina }); setShowNova(true); }}
+                                                                                style={{ ...btnSec, padding: '0.3rem 0.65rem', fontSize: '0.66rem', borderColor: `${ACCENT}55`, color: ACCENT }}><FaBroom size={9} /> Auditar</button>
+                                                                        )}
+                                                                    </span>
+                                                                </div>
+                                                                );
+                                                            })}
                                                         </div>
                                                     )}
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginTop: '0.45rem', fontSize: '0.63rem', color: 'var(--color-text-muted)', flexWrap: 'wrap' }}>
-                                                        {pendenteSemana(m)
-                                                            ? <span style={{ color: '#DC2626', fontWeight: 800 }}>⚠️ Pendente nesta semana</span>
-                                                            : <span style={{ color: '#16A34A', fontWeight: 800 }}>✓ Avaliada nesta semana</span>}
-                                                        {m.ult ? (() => {
-                                                            return <>
-                                                                <span>Última: {fmtData(m.ult.data_auditoria)}</span>
-                                                                {m.delta != null && <span style={{ fontWeight: 800, color: m.delta >= 0 ? '#16A34A' : '#DC2626' }}>{m.delta >= 0 ? '▲' : '▼'} {Math.abs(m.delta)} pts</span>}
-                                                                {m.acoesAbertas > 0 && <span style={{ color: '#D97706', fontWeight: 700 }}>{m.acoesAbertas} ação(ões)</span>}
-                                                            </>;
-                                                        })() : <span style={{ color: 'var(--color-text-subtle)', fontStyle: 'italic' }}>Nunca auditada</span>}
-                                                    </div>
-                                                    <button onClick={() => { setNovaPrefill({ planta: m.planta, fabrica: m.fabrica, setor: m.setor, maquina: m.maquina }); setShowNova(true); }}
-                                                        style={{ ...btnSec, width: '100%', justifyContent: 'center', marginTop: '0.6rem', borderColor: `${ACCENT}55`, color: ACCENT, fontSize: '0.7rem' }}>
-                                                        <FaBroom size={10} /> Auditar agora
-                                                    </button>
                                                 </div>
-                                            ))}
+                                                );
+                                            })}
                                         </div>
-                                        )}
-                                    </div>
-                                );})}
+                                        );
+                                    });
+                                })()}
                             </div>
                         )
                 )}
@@ -1630,7 +1835,9 @@ export default function Gestao5SView() {
                                                     <button className="s5-del" onClick={e => { e.stopPropagation(); setConfirmDel(a); }} style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(220,38,38,0.15)', border: 'none', color: '#DC2626', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.15s' }}><FaTimes size={10} /></button>
                                                 </div>
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', paddingRight: 80 }}>
-                                                    <span style={{ fontSize: '0.58rem', fontWeight: 800, padding: '0.15rem 0.5rem', borderRadius: 5, textTransform: 'uppercase', background: a.status === 'concluida' ? '#16A34A22' : '#D9770622', color: a.status === 'concluida' ? '#16A34A' : '#D97706' }}>{a.status === 'concluida' ? 'Concluída' : 'Aberta'}</span>
+                                                    <span style={{ fontSize: '0.58rem', fontWeight: 800, padding: '0.15rem 0.5rem', borderRadius: 5, textTransform: 'uppercase', background: a.status === 'concluida' ? '#16A34A22' : '#D9770622', color: a.status === 'concluida' ? '#16A34A' : '#D97706' }}
+                                                        title={a.status === 'concluida' ? '' : (faltantesDe(a).length ? `Falta avaliar: ${faltantesDe(a).map(it => it.label).join(' · ')}` : 'Tudo avaliado — falta só concluir')}>
+                                                        {a.status === 'concluida' ? 'Concluída' : `Rascunho · ${faltantesDe(a).length ? `falta ${faltantesDe(a).length}` : 'concluir'}`}</span>
                                                     <span style={{ fontSize: '0.62rem', color: 'var(--color-text-subtle)' }}>{fmtData(a.data_auditoria)}</span>
                                                     {a.maquina && <span style={{ fontSize: '0.58rem', fontWeight: 800, color: ACCENT, background: `${ACCENT}18`, borderRadius: 5, padding: '0.1rem 0.45rem' }}>{a.maquina}</span>}
                                                 </div>

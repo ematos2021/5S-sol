@@ -51,7 +51,7 @@ export const SENSOS = [
         id: 'seiso', num: '3S', nome: 'Seiso · Limpeza', cor: '#D97706',
         conceito: 'Limpar é inspecionar: eliminar sujeira e atacar suas fontes.',
         itens: [
-            { id: 's3_rotina', label: 'Rotina de limpeza da máquina cumprida', desc: 'Checklist de limpeza da máquina é visível no posto e preenchido conforme frequência definida através do FR.284 Escala de Limpeza.' },
+            { id: 's3_rotina', label: 'Rotina de limpeza da máquina cumprida', desc: 'Checklist de limpeza da máquina é visível no posto e preenchido conforme frequência definida através do FR.284 Escala de Limpeza.', emAvaliacao: true, infoMsg: 'Este item está temporariamente em avaliação enquanto o FR.284 (Escala de Limpeza) é implantado nos postos. Ele permanece visível para consulta, mas não é pontuado nem contabilizado no cálculo dos scores nesta fase.' },
             { id: 's3_fontes', label: 'Fontes de sujeira tratadas', desc: 'Vazamentos e geradores de sujeira na máquina identificados e com ação corretiva em andamento (não apenas limpeza repetida). Obs. Perguntar ao operador se tem algo que gere sujeira com frequência, caso sim, pedir o numeração da Nota ao líder/supervisor.' },
             { id: 's3_recursos', label: 'Recursos de limpeza disponíveis e organizados', desc: 'Panos, vassouras, rodos, pás e demais itens necessários identificados, em bom estado e em local padronizado e de acesso aos colaboradores do posto.' },
         ],
@@ -60,7 +60,7 @@ export const SENSOS = [
         id: 'seiketsu', num: '4S', nome: 'Seiketsu · Padronização', cor: '#8B5CF6',
         conceito: 'Transformar os 3 primeiros sensos em padrão visual e replicável.',
         itens: [
-            { id: 's4_padroes', label: 'Padrões visuais do posto', desc: 'Fotos de condição-padrão e critérios claros do \'certo\' visíveis no posto da máquina através do FR.285 - Condição padrão.' },
+            { id: 's4_padroes', label: 'Padrões visuais do posto', desc: 'Fotos de condição-padrão e critérios claros do \'certo\' visíveis no posto da máquina através do FR.285 - Condição padrão.', emAvaliacao: true, infoMsg: 'Este item está temporariamente em avaliação enquanto o FR.285 (Condição padrão) é implantado nos postos. Ele permanece visível para consulta, mas não é pontuado nem contabilizado no cálculo dos scores nesta fase.' },
             { id: 's4_operacao', label: 'Padrão de operação visível na máquina', desc: 'Parâmetros técnicos de processo e configurações visíveis na máquina/linha. Pessoa pertinente consegue comparar o estado atual com o padrão definido.' },
             { id: 's4_ergonomia', label: 'Ergonomia', desc: 'Ergonomia do posto avaliada conforme mapa postural.' },
         ],
