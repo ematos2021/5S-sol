@@ -10,6 +10,9 @@ import { createClient } from '@supabase/supabase-js';
 //
 //  A anon key aparecer no navegador é o desenho do Supabase — quem protege os
 //  dados são as políticas do banco. A service_role JAMAIS entra aqui.
+//
+//  Sozinha, a anon key não lê nada: as tabelas só abrem para quem entrou pelo
+//  Supabase Auth (database/acesso_login.sql).
 // ═══════════════════════════════════════════════════════════════════════════
 const url = import.meta.env.VITE_SUPABASE_URL;
 const chave = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -22,5 +25,15 @@ if (!supabaseConfigurado) {
 
 export const supabase = createClient(
     url || 'https://indisponivel.supabase.co',
-    chave || 'chave-ausente'
+    chave || 'chave-ausente',
+    // Sessão só em memória: toda vez que o app/site abre, começa no login.
+    { auth: { persistSession: false } }
 );
+
+// O login da tela é curto ("eugenio"); no Supabase Auth o usuário é um e-mail.
+const DOMINIO_LOGIN = '5s-sol.app';
+
+export function emailDoLogin(login) {
+    const l = (login || '').trim().toLowerCase();
+    return l.includes('@') ? l : `${l}@${DOMINIO_LOGIN}`;
+}

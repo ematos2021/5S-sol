@@ -1,7 +1,7 @@
 -- ════════════════════════════════════════════════════════════════════════
 --  Programa 5S + SOL — schema completo (Supabase / PostgreSQL)
 --  Rode este arquivo UMA vez num projeto Supabase novo. Depois, copie a URL
---  e a chave "anon" para src/services/supabase.js. Pronto para usar.
+--  e a chave "anon" para o .env e crie os usuários em Authentication → Users.
 --  Seguro de rodar mais de uma vez.
 -- ════════════════════════════════════════════════════════════════════════
 
@@ -65,14 +65,25 @@ drop trigger if exists trg_5s_updated on public.cinco_s_auditoria;
 create trigger trg_5s_updated before update on public.cinco_s_auditoria
     for each row execute function public.set_updated_at_5s();
 
--- ── Acesso (app sem login → acesso via chave anon) ───────────────────────
+-- ── Acesso: só quem entrou pelo Supabase Auth ────────────────────────────
+-- A chave pública vai dentro do APK, então ela sozinha não abre nada: o papel
+-- `anon` não tem permissão nenhuma. Os usuários são criados no painel em
+-- Authentication → Users → Add user (marque "Auto Confirm User").
 alter table public.cadastro_planta_area enable row level security;
 alter table public.cinco_s_auditoria   enable row level security;
 
+revoke all on public.cadastro_planta_area from anon;
+revoke all on public.cinco_s_auditoria   from anon;
+
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on public.cadastro_planta_area to authenticated;
+grant select, insert, update, delete on public.cinco_s_auditoria   to authenticated;
+grant usage, select on all sequences in schema public to authenticated;
+
 drop policy if exists area_all on public.cadastro_planta_area;
-create policy area_all on public.cadastro_planta_area for all using (true) with check (true);
+create policy area_all on public.cadastro_planta_area for all to authenticated using (true) with check (true);
 
 drop policy if exists aud_all on public.cinco_s_auditoria;
-create policy aud_all on public.cinco_s_auditoria for all using (true) with check (true);
+create policy aud_all on public.cinco_s_auditoria for all to authenticated using (true) with check (true);
 
 notify pgrst, 'reload schema';

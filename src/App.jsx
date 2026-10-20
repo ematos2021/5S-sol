@@ -4,15 +4,13 @@ import Gestao5SView from './pages/Gestao5SView';
 import PlantasView from './pages/PlantasView';
 import { setUsuario } from './services/usuario';
 import { iniciarNativo } from './services/nativo';
+import { supabase, emailDoLogin } from './services/supabase';
 
 const ACCENT = '#22C55E';
 const SOL = '#F59E0B';
 
-/* ── Usuários (no próprio pacote do app: é portaria, não cofre) ── */
-const USERS = [
-    { user: 'eugenio', pass: '123', nome: 'Eugênio', perfil: 'admin' },
-    { user: 'pedro', pass: '123', nome: 'Pedro', perfil: 'admin' },
-];
+/* ── Nome exibido por login. Quem confere a senha é o Supabase Auth. ── */
+const NOMES = { eugenio: 'Eugênio', pedro: 'Pedro' };
 
 /* ═══════════════ Tela de Login ═══════════════ */
 function LoginScreen({ onLogin }) {
@@ -20,18 +18,30 @@ function LoginScreen({ onLogin }) {
     const [pass, setPass] = useState('');
     const [error, setError] = useState('');
     const [shake, setShake] = useState(false);
+    const [entrando, setEntrando] = useState(false);
 
-    const handleSubmit = (e) => {
+    const falhar = (msg) => {
+        setError(msg);
+        setShake(true);
+        setTimeout(() => setShake(false), 500);
+    };
+
+    const handleSubmit = async (e) => {
         e.preventDefault();
-        const found = USERS.find(u => u.user === user.trim().toLowerCase() && u.pass === pass);
-        if (found) {
-            setUsuario(found.nome);
-            onLogin(found);
-        } else {
-            setError('Usuário ou senha inválidos');
-            setShake(true);
-            setTimeout(() => setShake(false), 500);
+        if (entrando) return;
+        const login = user.trim().toLowerCase();
+        setEntrando(true);
+        const { error: erro } = await supabase.auth.signInWithPassword({ email: emailDoLogin(login), password: pass });
+        setEntrando(false);
+        if (erro) {
+            falhar(erro.code === 'email_not_confirmed' ? 'Usuário não confirmado no Supabase'
+                : erro.status === 400 ? 'Usuário ou senha inválidos' : 'Sem conexão com o servidor');
+            return;
         }
+        const base = login.split('@')[0];
+        const u = { user: base, nome: NOMES[base] || base, perfil: 'admin' };
+        setUsuario(u.nome);
+        onLogin(u);
     };
 
     const inputStyle = {
@@ -127,7 +137,7 @@ function LoginScreen({ onLogin }) {
                         onMouseEnter={e => { e.target.style.transform = 'translateY(-1px)'; e.target.style.boxShadow = `0 6px 25px ${ACCENT}55`; }}
                         onMouseLeave={e => { e.target.style.transform = 'translateY(0)'; e.target.style.boxShadow = `0 4px 20px ${ACCENT}33`; }}
                     >
-                        Entrar
+                        {entrando ? 'Entrando…' : 'Entrar'}
                     </button>
                 </form>
             </div>
@@ -142,7 +152,7 @@ export default function App() {
     const [tab, setTab] = useState('cinco-s');
 
     const entrar = (u) => { setUsuario(u.nome); setLoggedUser(u); };
-    const sair = () => setLoggedUser(null);
+    const sair = () => { supabase.auth.signOut(); setLoggedUser(null); };
 
     // App instalado: barra de status, splash e botão "voltar" do Android.
     // Espelhamos a aba num ref porque o callback nativo é registrado uma vez só

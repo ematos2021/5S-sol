@@ -13,7 +13,7 @@ resumo executivo por IA e relatório analítico com fotos.
   maturidade 0–5, radar dos sensos, Índice Solar (nascer do sol), plano de ação,
   **Resumo Executivo por IA** e relatório analítico com anexos fotográficos.
 - **Plantas & Áreas** — cadastro da base de áreas (a fonte de tudo).
-- **Login** com sessão lembrada no aparelho.
+- **Login** pelo Supabase Auth; a sessão não fica salva no aparelho.
 
 ## Como rodar (desenvolvimento)
 
@@ -23,7 +23,7 @@ copy .env.example .env    # e preencha as duas linhas
 npm.cmd run dev           # http://localhost:5180
 ```
 
-Acesso: os usuários ficam em `USERS`, no `src/App.jsx`. O app sempre abre no login (a sessão não fica salva no aparelho).
+Acesso: login pelo Supabase Auth. Os usuários são criados no painel (Authentication → Users, com "Auto Confirm User") como `nome@5s-sol.app`; na tela entra-se só com `nome`. O app sempre abre no login (a sessão não fica salva no aparelho).
 
 ## Configurações
 
@@ -55,7 +55,7 @@ está indisponível. Código em `supabase/functions/resumo-executivo/index.ts`.
 
 1. Crie um projeto no [Supabase](https://supabase.com) e rode `database/schema.sql` no SQL Editor.
 2. Copie `.env.example` para `.env` e preencha URL + anon key.
-3. Ajuste os usuários em `src/App.jsx` (e leia a seção de segurança abaixo).
+3. Crie os usuários em Authentication → Users (`nome@5s-sol.app`, "Auto Confirm User"). O nome exibido fica em `NOMES`, no `src/App.jsx`.
 4. `npm run build` → publique `dist/`, e/ou gere o APK.
 5. Cadastre a estrutura em **Plantas & Áreas**. Pronto para auditar.
 
@@ -114,18 +114,12 @@ Crie `android/keystore.properties` com `storeFile=programa5s.jks`, `storePasswor
 
 **Resolvido:** as chaves saíram do código-fonte (`.env` + segredo de servidor para a IA).
 
-**Três coisas em aberto, todas decisão de produto:**
+**Resolvido (20/10/2026):** login real pelo Supabase Auth. A anon key sozinha não lê nem grava
+nada — as tabelas só abrem para o papel `authenticated` (`database/acesso_login.sql`).
+Senhas não ficam mais no código.
 
-1. **A tela de login exibe as credenciais de teste.** Ótimo para demonstrar, constrangedor
-   num app entregue ao cliente. Remova o bloco "CREDENCIAIS DE TESTE" em `src/App.jsx`
-   antes de gerar o APK de produção.
-2. **As senhas estão no código.** Login em JavaScript de cliente é portaria, não cofre:
-   quem abrir o pacote do app lê a lista de usuários. Serve para organizar quem é quem,
-   não para proteger dado.
-3. **O banco aceita qualquer um com a anon key.** O `database/schema.sql` habilita RLS mas
-   com políticas `using (true) with check (true)` — ou seja, ler, alterar e **apagar** tudo
-   é permitido, independentemente do login da tela. Para valer de verdade, o caminho é
-   Supabase Auth com políticas exigindo `auth.uid()`; o login da tela viraria o login real.
+**Em aberto:** todo usuário logado lê, altera e apaga tudo (políticas `using (true)` para
+`authenticated`). Se um dia houver perfis diferentes, as políticas passam a olhar `auth.uid()`.
 
 ## Stack
 
