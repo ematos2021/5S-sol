@@ -11,6 +11,9 @@ alter table public.cinco_s_auditoria   enable row level security;
 -- A chave pública (vai dentro do APK) não abre nada sozinha.
 revoke all on public.cadastro_planta_area from anon;
 revoke all on public.cinco_s_auditoria   from anon;
+-- Desfaz a contingência (contingencia_abrir_anon.sql), se tiver sido aberta.
+drop policy if exists area_anon_contingencia on public.cadastro_planta_area;
+drop policy if exists aud_anon_contingencia on public.cinco_s_auditoria;
 
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.cadastro_planta_area to authenticated;

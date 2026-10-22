@@ -13,7 +13,7 @@ import {
     FaChartPie, FaListUl, FaMapMarkedAlt, FaCamera, FaArrowLeft, FaCheckCircle,
     FaIndustry, FaExclamationTriangle, FaBolt, FaGraduationCap, FaClipboardCheck, FaFilePdf,
     FaSun, FaShieldAlt, FaHardHat, FaTrophy, FaMagic, FaRobot, FaSave, FaPen, FaSpinner, FaCalendarAlt, FaInfoCircle,
-    FaSearch, FaFilter, FaLayerGroup, FaArrowUp, FaArrowDown, FaEye, FaBuilding, FaChartLine,
+    FaBan, FaSearch, FaFilter, FaLayerGroup, FaArrowUp, FaArrowDown, FaEye, FaBuilding, FaChartLine,
 } from 'react-icons/fa';
 
 const ACCENT = '#22C55E';
@@ -46,15 +46,23 @@ const numSemana = (seg) => { // ISO 8601: a semana 1 é a que tem a primeira qui
 };
 const fmtCurto = (iso) => dataLocal(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
 const rotuloSemana = (seg) => `Semana ${numSemana(seg)} · ${fmtCurto(seg)} a ${fmtCurto(somaDias(seg, 6))}`;
+// Máquina parada a semana inteira não tem o que auditar: o registro "sem_operacao"
+// fecha a pendência da rotina, mas NÃO é auditoria — sem nota, fora de média,
+// KPI e histórico, que só leem 'concluida'. O motivo fica em observacoes._motivo.
+const SEM_OPERACAO = 'sem_operacao';
+const FECHA_SEMANA = ['concluida', SEM_OPERACAO];
+const motivoParada = (a) => String(a?.observacoes?._motivo || '').trim();
 // areaKey → (semana → auditoria concluída mais recente daquela semana)
 const indexarSemanas = (auditorias) => {
     const idx = new Map();
     auditorias.forEach(a => {
-        if (a.status !== 'concluida' || !a.data_auditoria) return;
+        if (!FECHA_SEMANA.includes(a.status) || !a.data_auditoria) return;
         const k = areaKey(a), s = semanaDe(a.data_auditoria);
         if (!idx.has(k)) idx.set(k, new Map());
         const m = idx.get(k), atual = m.get(s);
-        if (!atual || String(a.data_auditoria) > String(atual.data_auditoria)) m.set(s, a);
+        // Auditoria de verdade vence o "sem operação" da mesma semana, qualquer que seja a data
+        if (atual && atual.status === 'concluida' && a.status !== 'concluida') return;
+        if (!atual || (atual.status !== 'concluida' && a.status === 'concluida') || (atual.status === a.status && String(a.data_auditoria) > String(atual.data_auditoria))) m.set(s, a);
     });
     return idx;
 };
@@ -1253,14 +1261,34 @@ export default function Gestao5SView() {
 
     const criarAuditoria = ({ planta, fabrica, setor, maquina, auditor, acompanhante }) => {
         let max = 0;
+        const reais = auditorias.filter(a => a.status !== SEM_OPERACAO);
         auditorias.forEach(a => { const m = String(a.titulo || '').match(/Nº\s*(\d+)/i); if (m) max = Math.max(max, parseInt(m[1], 10)); });
-        const num = String(Math.max(max, auditorias.length) + 1).padStart(3, '0');
+        const num = String(Math.max(max, reais.length) + 1).padStart(3, '0');
         const mes = new Date().toLocaleDateString('pt-BR', { month: 'long' });
         const alvo = `${setor}${maquina ? ` · ${maquina}` : ''}`;
         const titulo = `5S Nº ${num} · ${fabrica} · ${alvo} · ${mes.charAt(0).toUpperCase()}${mes.slice(1)}/${new Date().getFullYear()}`;
         setShowNova(false);
         setNovaPrefill(null);
         setSel({ titulo, planta, fabrica, setor, maquina: maquina || null, auditor: auditor || userName, acompanhante, data_auditoria: hojeISO(), status: 'aberta', respostas: {}, observacoes: {}, fotos: {}, planos: [], criado_por: userName });
+    };
+
+    // "Não auditar": máquina parada a semana toda. Grava um registro sem notas
+    // (status sem_operacao) com o motivo — a pendência da rotina fecha, a nota não existe.
+    const registrarParada = async ({ planta, fabrica, setor, maquina, auditor, motivo }) => {
+        if (semanas.get(areaKey({ planta, fabrica, setor, maquina }))?.has(semanaAgora)) {
+            showMsg('Esta máquina já está fechada nesta semana (auditada ou sem operação)', 'error'); return;
+        }
+        const mes = new Date().toLocaleDateString('pt-BR', { month: 'long' });
+        const titulo = `Sem operação · ${fabrica} · ${setor} · ${maquina} · ${mes.charAt(0).toUpperCase()}${mes.slice(1)}/${new Date().getFullYear()}`;
+        const { data, error } = await supabase.from('cinco_s_auditoria').insert([{
+            titulo, planta, fabrica, setor, maquina, auditor: auditor || userName, data_auditoria: diaLocal(new Date()), // data LOCAL: fecha a semana certa mesmo à noite
+            status: SEM_OPERACAO, respostas: {}, observacoes: { _motivo: motivo }, fotos: {}, planos: [],
+            score: null, scores: {}, criado_por: userName,
+        }]).select().single();
+        if (error) { showMsg('Erro: ' + error.message, 'error'); return; }
+        setAuditorias(prev => [tratarAuditoria(data), ...prev]);
+        setShowNova(false); setNovaPrefill(null);
+        showMsg('Máquina marcada como sem operação — pendência da semana fechada');
     };
 
     const excluir = async (a) => {
@@ -1346,7 +1374,7 @@ export default function Gestao5SView() {
         // não fechou. Fica visível no mapa como rascunho — sem entrar em média,
         // KPI nem rotina semanal, que continuam contando só auditoria concluída.
         const rasc = auditoriasFiltradas
-            .filter(a => a.status !== 'concluida' && areaKey(a) === areaKey(area) && (!ult || String(a.data_auditoria || '') >= String(ult.data_auditoria || '')))
+            .filter(a => a.status === 'aberta' && areaKey(a) === areaKey(area) && (!ult || String(a.data_auditoria || '') >= String(ult.data_auditoria || '')))
             .sort((a, b) => String(b.data_auditoria || '').localeCompare(String(a.data_auditoria || '')) || (b.id || 0) - (a.id || 0))[0] || null;
         const acoesAbertas = hist.reduce((s, a) => s + (a.planos || []).filter(p => p.status !== 'concluida').length, 0);
         const sU = ult ? solarDe(ult) : null, sA = ant ? solarDe(ant) : null;
@@ -1400,6 +1428,7 @@ export default function Gestao5SView() {
     const semanas = indexarSemanas(auditorias);
     const semanaAgora = semanaAtualKey();
     const pendenteSemana = (m) => !semanas.get(areaKey(m))?.has(semanaAgora);
+    const paradaNaSemana = (m) => semanas.get(areaKey(m))?.get(semanaAgora)?.status === SEM_OPERACAO;
 
     // ── Mapa em árvore, numerado como plano de contas ───────────────────────────
     // 1 Setor → 1.1 Fábrica → 1.1.01 Linha/Máquina. Fechado, o mapa inteiro cabe
@@ -1449,11 +1478,11 @@ export default function Gestao5SView() {
     const chavesArvore = arvoreMapa.flatMap(s => [s.k, ...s.fabs.map(f => f.k)]);
 
     // ── Comparativo de evolução: auditorias marcadas nos cards ───────────────
-    const audsSelecionadas = auditorias.filter(a => selecao.has(a.id));
+    const audsSelecionadas = auditorias.filter(a => selecao.has(a.id) && a.status !== SEM_OPERACAO);
     // Com uma só marcada, o atalho traz o histórico inteiro daquela linha/máquina
     // — que é a comparação que quase sempre se quer fazer.
     const irmasDaSelecionada = audsSelecionadas.length === 1
-        ? auditoriasFiltradas.filter(a => areaKey(a) === areaKey(audsSelecionadas[0]) && !selecao.has(a.id))
+        ? auditoriasFiltradas.filter(a => a.status !== SEM_OPERACAO && areaKey(a) === areaKey(audsSelecionadas[0]) && !selecao.has(a.id))
         : [];
 
     // ── Indicadores ──────────────────────────────────────────────────────────────
@@ -1725,6 +1754,8 @@ export default function Gestao5SView() {
                                                                         </button>
                                                                     ) : pendenteSemana(m) ? (
                                                                         <span style={{ flexShrink: 0, fontSize: '0.6rem', fontWeight: 800, color: '#DC2626', whiteSpace: 'nowrap' }}>Pendente na semana</span>
+                                                                    ) : paradaNaSemana(m) ? (
+                                                                        <span title={motivoParada(semanas.get(areaKey(m)).get(semanaAgora))} style={{ flexShrink: 0, fontSize: '0.6rem', fontWeight: 800, color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>Sem operação na semana</span>
                                                                     ) : (
                                                                         <span style={{ flexShrink: 0, fontSize: '0.6rem', fontWeight: 800, color: '#16A34A', whiteSpace: 'nowrap' }}>✓ Avaliada na semana</span>
                                                                     )}
@@ -1823,25 +1854,31 @@ export default function Gestao5SView() {
                                     {aberto && (
                                     <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? '100%' : '280px'}, 1fr))`, gap: '0.7rem', padding: '0 0.9rem 0.9rem' }}>
                                         {grp.itens.map(a => { const sc = scoresDaAuditoria(a); const marcada = selecao.has(a.id); return (
-                                            <div key={a.id} className="glass-panel s5-card" onClick={() => setSel(a)} style={{ borderRadius: 11, border: `1px solid ${marcada ? `${SOL_ACCENT}88` : 'var(--border-color-dark)'}`, background: marcada ? `${SOL_ACCENT}0f` : undefined, padding: '0.85rem', cursor: 'pointer', position: 'relative', transition: 'transform 0.15s' }}
+                                            <div key={a.id} className="glass-panel s5-card" onClick={() => a.status !== SEM_OPERACAO && setSel(a)} style={{ borderRadius: 11, border: `1px solid ${marcada ? `${SOL_ACCENT}88` : 'var(--border-color-dark)'}`, background: marcada ? `${SOL_ACCENT}0f` : undefined, padding: '0.85rem', cursor: a.status === SEM_OPERACAO ? 'default' : 'pointer', position: 'relative', transition: 'transform 0.15s' }}
                                                 onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-3px)'} onMouseLeave={e => e.currentTarget.style.transform = 'none'}>
                                                 <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 4, alignItems: 'center' }}>
-                                                    <button onClick={e => { e.stopPropagation(); toggleSelecao(a.id); }} title={marcada ? 'Tirar do comparativo de evolução' : 'Marcar para comparar a evolução'}
+                                                    {!(a.status === SEM_OPERACAO) && <button onClick={e => { e.stopPropagation(); toggleSelecao(a.id); }} title={marcada ? 'Tirar do comparativo de evolução' : 'Marcar para comparar a evolução'}
                                                         style={{ width: 22, height: 22, borderRadius: 6, background: marcada ? SOL_ACCENT : 'transparent', border: `1.5px solid ${marcada ? SOL_ACCENT : 'var(--border-color-dark)'}`, color: '#3B1D00', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
                                                         {marcada && <FaCheck size={10} />}
-                                                    </button>
-                                                    <button className="s5-del" onClick={e => { e.stopPropagation(); abrirRelatorio(montarRelatorio5S(a, historicoDaMaquina(a, auditorias))); }} title="Relatório analítico"
-                                                        style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(59,130,246,0.18)', border: 'none', color: '#3B82F6', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.15s' }}><FaFilePdf size={10} /></button>
+                                                    </button>}
+                                                    {!(a.status === SEM_OPERACAO) && <button className="s5-del" onClick={e => { e.stopPropagation(); abrirRelatorio(montarRelatorio5S(a, historicoDaMaquina(a, auditorias))); }} title="Relatório analítico"
+                                                        style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(59,130,246,0.18)', border: 'none', color: '#3B82F6', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.15s' }}><FaFilePdf size={10} /></button>}
                                                     <button className="s5-del" onClick={e => { e.stopPropagation(); setConfirmDel(a); }} style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(220,38,38,0.15)', border: 'none', color: '#DC2626', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.15s' }}><FaTimes size={10} /></button>
                                                 </div>
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', paddingRight: 80 }}>
-                                                    <span style={{ fontSize: '0.58rem', fontWeight: 800, padding: '0.15rem 0.5rem', borderRadius: 5, textTransform: 'uppercase', background: a.status === 'concluida' ? '#16A34A22' : '#D9770622', color: a.status === 'concluida' ? '#16A34A' : '#D97706' }}
-                                                        title={a.status === 'concluida' ? '' : (faltantesDe(a).length ? `Falta avaliar: ${faltantesDe(a).map(it => it.label).join(' · ')}` : 'Tudo avaliado — falta só concluir')}>
-                                                        {a.status === 'concluida' ? 'Concluída' : `Rascunho · ${faltantesDe(a).length ? `falta ${faltantesDe(a).length}` : 'concluir'}`}</span>
+                                                    <span style={{ fontSize: '0.58rem', fontWeight: 800, padding: '0.15rem 0.5rem', borderRadius: 5, textTransform: 'uppercase', background: a.status === 'concluida' ? '#16A34A22' : a.status === SEM_OPERACAO ? '#64748B22' : '#D9770622', color: a.status === 'concluida' ? '#16A34A' : a.status === SEM_OPERACAO ? '#94A3B8' : '#D97706' }}
+                                                        title={a.status === SEM_OPERACAO ? motivoParada(a) : a.status === 'concluida' ? '' : (faltantesDe(a).length ? `Falta avaliar: ${faltantesDe(a).map(it => it.label).join(' · ')}` : 'Tudo avaliado — falta só concluir')}>
+                                                        {a.status === SEM_OPERACAO ? 'Sem operação' : a.status === 'concluida' ? 'Concluída' : `Rascunho · ${faltantesDe(a).length ? `falta ${faltantesDe(a).length}` : 'concluir'}`}</span>
                                                     <span style={{ fontSize: '0.62rem', color: 'var(--color-text-subtle)' }}>{fmtData(a.data_auditoria)}</span>
                                                     {a.maquina && <span style={{ fontSize: '0.58rem', fontWeight: 800, color: ACCENT, background: `${ACCENT}18`, borderRadius: 5, padding: '0.1rem 0.45rem' }}>{a.maquina}</span>}
                                                 </div>
                                                 <div style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--color-text-main)', marginTop: '0.5rem', lineHeight: 1.3 }}>{a.titulo}</div>
+                                                {a.status === SEM_OPERACAO ? (
+                                                    <div style={{ marginTop: '0.6rem', fontSize: '0.66rem', color: 'var(--color-text-muted)', lineHeight: 1.45 }}>
+                                                        <div>Motivo: <b style={{ color: 'var(--color-text-main)' }}>{motivoParada(a) || '—'}</b></div>
+                                                        <div style={{ marginTop: 2 }}>Registrado por {a.auditor || '—'} · sem nota, fora das médias.</div>
+                                                    </div>
+                                                ) : (
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.9rem', marginTop: '0.6rem' }}>
                                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.15rem', flexShrink: 0 }}>
                                                         <RingGauge value={sc.solar} size={46} stroke={5} />
@@ -1853,6 +1890,7 @@ export default function Gestao5SView() {
                                                         <span>{(a.planos || []).filter(p => p.status !== 'concluida').length} ação(ões) aberta(s)</span>
                                                     </div>
                                                 </div>
+                                                )}
                                             </div>
                                         );})}
                                     </div>
@@ -2034,7 +2072,7 @@ export default function Gestao5SView() {
             {/* Modal nova auditoria */}
             {showNova && (
                 <NovaAuditoriaModal estrutura={estrutura} prefill={novaPrefill} userName={userName}
-                    onClose={() => { setShowNova(false); setNovaPrefill(null); }} onCreate={criarAuditoria} />
+                    onClose={() => { setShowNova(false); setNovaPrefill(null); }} onCreate={criarAuditoria} onParada={registrarParada} />
             )}
 
             {confirmDel && (
@@ -2330,6 +2368,7 @@ const RotinaSemanal = ({ mapa, semanas, isMobile, onAuditar, onAbrir }) => {
     const pendArea = (a) => daFabrica.filter(m => (a === 'todas' || norm(m.setor) === a) && !audDe(m, semana)).length;
     const audDe = (m, s) => semanas.get(areaKey(m))?.get(s) || null;
     const feitas = base.filter(m => audDe(m, semana)).length;
+    const paradas = base.filter(m => audDe(m, semana)?.status === SEM_OPERACAO).length;
     const cobertura = pct(feitas, base.length);
     // Dias que ainda restam para fechar a semana (conta hoje)
     const restam = ehAtual ? 7 - ((new Date().getDay() + 6) % 7) : 0;
@@ -2388,10 +2427,11 @@ const RotinaSemanal = ({ mapa, semanas, isMobile, onAuditar, onAbrir }) => {
                 </div>
 
                 {/* Números da semana */}
-                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', gap: '0.6rem', marginTop: '0.9rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(5, 1fr)', gap: '0.6rem', marginTop: '0.9rem' }}>
                     {[
-                        ['Cobertura', cobertura != null ? `${cobertura}%` : '—', corCobertura(cobertura)],
-                        ['Avaliadas', `${feitas}/${base.length}`, 'var(--color-text-main)'],
+                        ['Cobertura (auditadas + sem operação)', cobertura != null ? `${cobertura}%` : '—', corCobertura(cobertura)],
+                        ['Auditadas', `${feitas - paradas}/${base.length}`, 'var(--color-text-main)'],
+                        ['Sem operação', paradas, 'var(--color-text-muted)'],
                         ['Pendentes', base.length - feitas, base.length - feitas ? '#DC2626' : '#16A34A'],
                         [ehAtual ? 'Por dia até domingo' : 'Situação', ehAtual ? (base.length - feitas ? Math.ceil((base.length - feitas) / restam) : 0) : (feitas === base.length ? 'Fechada' : 'Não fechou'), ehAtual ? 'var(--color-text-main)' : corCobertura(cobertura)],
                     ].map(([l, v, c]) => (
@@ -2452,7 +2492,15 @@ const RotinaSemanal = ({ mapa, semanas, isMobile, onAuditar, onAbrir }) => {
                                     </div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? '100%' : '210px'}, 1fr))`, gap: '0.4rem' }}>
-                                    {gr.visiveis.map(m => m.aud ? (
+                                    {gr.visiveis.map(m => m.aud && m.aud.status === SEM_OPERACAO ? (
+                                        <div key={areaKey(m)} title={motivoParada(m.aud)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#64748B14', border: '1px solid #64748B44', borderRadius: 8, padding: '0.4rem 0.55rem' }}>
+                                            <FaBan size={10} color="#94A3B8" style={{ flexShrink: 0 }} />
+                                            <span style={{ flex: 1, minWidth: 0 }}>
+                                                <span style={{ display: 'block', fontSize: '0.72rem', fontWeight: 800, color: 'var(--color-text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.maquina || 'Setor inteiro'}</span>
+                                                <span style={{ display: 'block', fontSize: '0.58rem', color: 'var(--color-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Sem operação · {fmtCurto(m.aud.data_auditoria)}{motivoParada(m.aud) ? ` · ${motivoParada(m.aud)}` : ''}</span>
+                                            </span>
+                                        </div>
+                                    ) : m.aud ? (
                                         <button key={areaKey(m)} onClick={() => onAbrir(m.aud)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#16A34A10', border: '1px solid #16A34A44', borderRadius: 8, padding: '0.4rem 0.55rem', cursor: 'pointer', textAlign: 'left' }}>
                                             <FaCheckCircle size={11} color="#16A34A" style={{ flexShrink: 0 }} />
                                             <span style={{ flex: 1, minWidth: 0 }}>
@@ -2481,7 +2529,7 @@ const RotinaSemanal = ({ mapa, semanas, isMobile, onAuditar, onAbrir }) => {
             {/* Últimas 8 semanas por setor */}
             <div className="glass-panel" style={{ borderRadius: 14, border: '1px solid var(--border-color-dark)', padding: '1rem 1.1rem' }}>
                 <div style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--color-text-main)' }}>Últimas 8 semanas</div>
-                <div style={{ fontSize: '0.64rem', color: 'var(--color-text-muted)', margin: '0.15rem 0 0.7rem' }}>% das linhas/máquinas do setor avaliadas em cada semana. Clique numa semana para abri-la.</div>
+                <div style={{ fontSize: '0.64rem', color: 'var(--color-text-muted)', margin: '0.15rem 0 0.7rem' }}>% das linhas/máquinas do setor auditadas ou sem operação em cada semana. Clique numa semana para abri-la.</div>
                 <div style={{ overflowX: 'auto' }}>
                     <table style={{ borderCollapse: 'separate', borderSpacing: 3, fontSize: '0.66rem', width: '100%' }}>
                         <thead>
@@ -2517,7 +2565,9 @@ const RotinaSemanal = ({ mapa, semanas, isMobile, onAuditar, onAbrir }) => {
 };
 
 // Modal: nova auditoria (planta → fábrica → setor → linha/máquina do cadastro)
-const NovaAuditoriaModal = ({ estrutura, prefill, userName, onClose, onCreate }) => {
+const NovaAuditoriaModal = ({ estrutura, prefill, userName, onClose, onCreate, onParada }) => {
+    const [confirmaParada, setConfirmaParada] = useState(false);
+    const [motivo, setMotivo] = useState('Máquina sem operação na semana');
     const [planta, setPlanta] = useState(prefill?.planta || '');
     const [fabrica, setFabrica] = useState(prefill?.fabrica || '');
     const [setor, setSetor] = useState(prefill?.setor || '');
@@ -2537,6 +2587,8 @@ const NovaAuditoriaModal = ({ estrutura, prefill, userName, onClose, onCreate })
         <ModalShell title={<><FaBroom color={ACCENT} /> Nova Auditoria 5S</>} onClose={onClose}
             footer={<>
                 <button onClick={onClose} style={btnSec}>Cancelar</button>
+                <button disabled={!ok || !maquina} onClick={() => setConfirmaParada(true)} title={maquina ? 'Máquina parada a semana toda: fecha a pendência sem auditar' : 'Escolha uma linha/máquina'}
+                    style={{ ...btnSec, padding: '0.55rem 1rem', borderColor: '#DC262688', color: '#F87171', opacity: ok && maquina ? 1 : 0.4 }}><FaBan size={12} /> Não auditar</button>
                 <button disabled={!ok} onClick={() => onCreate({ planta, fabrica, setor, maquina: maquina || null, auditor, acompanhante })} style={{ ...btnPrim, opacity: ok ? 1 : 0.5 }}><FaPlus size={12} /> Iniciar auditoria</button>
             </>}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.8rem' }}>
@@ -2560,6 +2612,19 @@ const NovaAuditoriaModal = ({ estrutura, prefill, userName, onClose, onCreate })
                 <div><label style={labelSty}>Auditor</label><input style={inputSty} value={auditor} onChange={e => setAuditor(e.target.value)} /></div>
                 <div><label style={labelSty}>Acompanhante</label><input style={inputSty} value={acompanhante} onChange={e => setAcompanhante(e.target.value)} placeholder="Líder da área (opcional)" /></div>
             </div>
+            {confirmaParada && (
+                <div style={{ marginTop: '0.9rem', border: '1px solid #DC262655', background: '#DC26260d', borderRadius: 10, padding: '0.8rem' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--color-text-main)' }}>Fechar a pendência de <span style={{ color: '#F87171' }}>{maquina}</span> sem auditar?</div>
+                    <div style={{ fontSize: '0.66rem', color: 'var(--color-text-muted)', margin: '0.25rem 0 0.5rem', lineHeight: 1.45 }}>Fecha a <b>{rotuloSemana(semanaAtualKey())}</b>. Fica registrado como <b>sem operação</b>, com o motivo. Não gera nota nem entra nas médias — só tira a máquina das pendências da semana.</div>
+                    <label style={labelSty}>Motivo *</label>
+                    <input style={inputSty} value={motivo} onChange={e => setMotivo(e.target.value)} />
+                    <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '0.6rem' }}>
+                        <button onClick={() => setConfirmaParada(false)} style={btnSec}>Voltar</button>
+                        <button disabled={!motivo.trim()} onClick={() => onParada({ planta, fabrica, setor, maquina, auditor, motivo: motivo.trim() })}
+                            style={{ ...btnPrim, background: '#DC2626', color: '#fff', opacity: motivo.trim() ? 1 : 0.5 }}><FaBan size={12} /> Confirmar sem operação</button>
+                    </div>
+                </div>
+            )}
             {composicao.length > 0 && <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', marginTop: '0.6rem' }}><b style={{ color: 'var(--color-text-main)' }}>{maquina}</b> é composta por: {composicao.join(', ')}. Avalie o conjunto.</div>}
             {maquinas.length > 0 && !maquina && <div style={{ fontSize: '0.66rem', color: 'var(--color-text-muted)', marginTop: '0.6rem' }}>Deixe em <b>Setor inteiro</b> para auditar o setor como um todo, ou escolha uma linha/máquina específica.</div>}
         </ModalShell>
